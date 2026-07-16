@@ -1,0 +1,26 @@
+load("@rules_java//java:java_import.bzl", "java_import")
+load("@rules_java//java:java_test.bzl", "java_test")
+
+package(default_applicable_licenses = ["@rules_java//:license"])
+
+java_test(
+    name = "CodecTest",
+    srcs = ["CodecTest.java"],
+    test_class = "com.google.devtools.build.rules_java.warmup.common.wire.CodecTest",
+    deps = [
+        ":guava",
+        ":truth",
+        "//java/runtime/warmup:common",
+        "//java/runtime/warmup:wire",
+    ],
+)
+
+java_import(
+    name = "guava",
+    jars = ["@guava//file"],
+)
+
+java_import(
+    name = "truth",
+    jars = ["@truth//file"],
+)

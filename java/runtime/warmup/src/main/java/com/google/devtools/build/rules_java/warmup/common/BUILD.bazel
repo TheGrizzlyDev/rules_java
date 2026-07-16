@@ -1,0 +1,15 @@
+load("//java:java_library.bzl", "java_library")
+
+package(default_applicable_licenses = ["@rules_java//:license"])
+
+java_library(
+    name = "common",
+    srcs = ["Profile.java"],
+    visibility = ["//java/runtime/warmup:__subpackages__"],
+)
+
+filegroup(
+    name = "srcs",
+    srcs = glob(["**"]),
+    visibility = ["//java/runtime/warmup:__pkg__"],
+)

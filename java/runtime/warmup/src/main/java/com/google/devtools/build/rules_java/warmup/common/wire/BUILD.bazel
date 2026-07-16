@@ -1,0 +1,18 @@
+load("//java:java_library.bzl", "java_library")
+
+package(default_applicable_licenses = ["@rules_java//:license"])
+
+java_library(
+    name = "wire",
+    srcs = glob(["*.java"]),
+    visibility = ["//java/runtime/warmup:__pkg__"],
+    deps = [
+        "//java/runtime/warmup/src/main/java/com/google/devtools/build/rules_java/warmup/common",
+    ],
+)
+
+filegroup(
+    name = "srcs",
+    srcs = glob(["**"]),
+    visibility = ["//java/runtime/warmup:__pkg__"],
+)
