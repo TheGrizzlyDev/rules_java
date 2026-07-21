@@ -18,10 +18,6 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 
-/**
- * On-disk profile schema. Mirrors the proto {@code Profile} message 1:1 so coordinator and engine
- * can use a single in-memory representation regardless of whether state arrived from disk or wire.
- */
 public final class Profile {
 
   /**

@@ -20,8 +20,8 @@ import java.util.List;
 
 /**
  * Running test JVM -> coordinator: a batch of observations about classes loaded and methods that
- * proved hot. Reported only for classes resolved via the framework loader on the running side;
- * test-world-loaded classes are version-specific and never reported.
+ * proved hot during the run. Every class resolved on the running side is reported along with its
+ * digest; the coordinator ranks by frequency across runs to decide what to preload next.
  */
 public final class TelemetrySample {
   private final List<Profile.PreloadEntry> loadedClasses;

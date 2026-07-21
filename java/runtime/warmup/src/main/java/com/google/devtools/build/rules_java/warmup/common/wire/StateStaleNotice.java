@@ -17,8 +17,8 @@ import java.util.Objects;
 
 /**
  * Coordinator -> warming JVM: a class's reported digest from a running JVM diverges from the
- * digest that was warmed into the framework loader. The warming JVM logs and stays passive; the
- * build orchestrator decides when to retire the engine.
+ * digest under which it was preloaded. The warming JVM evicts that class so the next reference
+ * reloads fresh from the current classpath.
  */
 public final class StateStaleNotice implements ServerEvent {
   private final String fqClassName;

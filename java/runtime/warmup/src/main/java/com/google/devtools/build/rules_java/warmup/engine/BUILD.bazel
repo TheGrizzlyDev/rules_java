@@ -1,0 +1,25 @@
+load("//java:java_binary.bzl", "java_binary")
+load("//java:java_library.bzl", "java_library")
+
+package(default_applicable_licenses = ["@rules_java//:license"])
+
+java_library(
+    name = "engine_lib",
+    srcs = glob(["*.java"]),
+    deps = [
+        "//java/runtime/warmup/src/main/java/com/google/devtools/build/rules_java/warmup/common",
+        "//java/runtime/warmup/src/main/java/com/google/devtools/build/rules_java/warmup/common/wire",
+    ],
+    javacopts = ["--release", "14"],
+    target_compatible_with = select({
+        "//java/runtime/warmup:pre_jfr_support": ["@platforms//:incompatible"],
+        "//conditions:default": [],
+    }),
+)
+
+java_binary(
+    name = "engine",
+    main_class = "com.google.devtools.build.rules_java.warmup.engine.Engine",
+    visibility = ["//java/runtime/warmup/src/main/java/com/google/devtools/build/rules_java/warmup/coordinator:__pkg__"],
+    runtime_deps = [":engine_lib"],
+)

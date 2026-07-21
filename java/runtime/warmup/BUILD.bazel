@@ -1,21 +1,23 @@
 package(default_applicable_licenses = ["@rules_java//:license"])
 
-alias(
-    name = "common",
-    actual = "//java/runtime/warmup/src/main/java/com/google/devtools/build/rules_java/warmup/common",
-    visibility = ["//visibility:public"],
-)
+load("@bazel_skylib//lib:selects.bzl", "selects")
 
-alias(
-    name = "wire",
-    actual = "//java/runtime/warmup/src/main/java/com/google/devtools/build/rules_java/warmup/common/wire",
-    visibility = ["//visibility:public"],
-)
+# TODO(TheGrizzlyDev): does the test runtime use tool_java_language_version or java_language_version?
+config_setting(name = "java_8", values = {"java_language_version": "8"})
+config_setting(name = "java_9", values = {"java_language_version": "9"})
+config_setting(name = "java_10", values = {"java_language_version": "10"})
+config_setting(name = "java_11", values = {"java_language_version": "11"})
+config_setting(name = "java_12", values = {"java_language_version": "12"})
+config_setting(name = "java_13", values = {"java_language_version": "13"})
 
-filegroup(
-    name = "srcs",
-    srcs = glob(["**"]) + [
-        "//java/runtime/warmup/src/main/java/com/google/devtools/build/rules_java/warmup/common:srcs",
+selects.config_setting_group(
+    name = "pre_jfr_support",
+    match_any = [
+        ":java_8",
+        ":java_9",
+        ":java_10",
+        ":java_11",
+        ":java_12",
+        ":java_13",
     ],
-    visibility = ["//java:__pkg__"],
 )

@@ -1,0 +1,22 @@
+load("//java:java_binary.bzl", "java_binary")
+load("//java:java_library.bzl", "java_library")
+
+package(default_applicable_licenses = ["@rules_java//:license"])
+
+java_library(
+    name = "coordinator_lib",
+    srcs = glob(["*.java"]),
+    deps = [
+        "//java/runfiles",
+        "//java/runtime/warmup/src/main/java/com/google/devtools/build/rules_java/warmup/common",
+        "//java/runtime/warmup/src/main/java/com/google/devtools/build/rules_java/warmup/common/wire",
+    ],
+)
+
+java_binary(
+    name = "coordinator",
+    data = ["//java/runtime/warmup/src/main/java/com/google/devtools/build/rules_java/warmup/engine"],
+    main_class = "com.google.devtools.build.rules_java.warmup.coordinator.Coordinator",
+    visibility = ["//java/runtime/warmup:__pkg__"],
+    runtime_deps = [":coordinator_lib"],
+)

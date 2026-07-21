@@ -4,12 +4,6 @@ package(default_applicable_licenses = ["@rules_java//:license"])
 
 java_library(
     name = "common",
-    srcs = ["Profile.java"],
+    srcs = glob(["*.java"]),
     visibility = ["//java/runtime/warmup:__subpackages__"],
-)
-
-filegroup(
-    name = "srcs",
-    srcs = glob(["**"]),
-    visibility = ["//java/runtime/warmup:__pkg__"],
 )
