@@ -29,6 +29,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.logging.Level;
@@ -49,6 +50,9 @@ public final class Engine {
 
   /** How often the background reporter drains its counters and emits a TelemetrySample. */
   private static final Duration REPORTING_INTERVAL = Duration.ofSeconds(5);
+
+  /** Advisory JIT tier reported for every hot method. JFR doesn't tell us the real tier. */
+  private static final int ADVISORY_TIER = 4;
 
   private final int port;
   private final Object writeLock = new Object();
@@ -142,7 +146,7 @@ public final class Engine {
 
   private void runTelemetryReporter(OutputStream out) {
     Map<String, LongAdder> loadedClasses = new ConcurrentHashMap<>();
-    Map<String, LongAdder> hotMethods = new ConcurrentHashMap<>();
+    Map<MethodKey, LongAdder> hotMethods = new ConcurrentHashMap<>();
 
     try (RecordingStream rs = new RecordingStream()) {
       rs.enable("jdk.ExecutionSample").withPeriod(Duration.ofMillis(10));
@@ -154,7 +158,9 @@ public final class Engine {
               return;
             }
             var method = stackTrace.getFrames().get(0).getMethod();
-            String key = method.getType().getName() + "#" + method.getName();
+            MethodKey key =
+                new MethodKey(
+                    method.getType().getName(), method.getName(), method.getDescriptor());
             hotMethods.computeIfAbsent(key, k -> new LongAdder()).increment();
           });
 
@@ -184,22 +190,32 @@ public final class Engine {
   }
 
   private void emitSample(
-      OutputStream out, Map<String, LongAdder> loadedClasses, Map<String, LongAdder> hotMethods) {
+      OutputStream out,
+      Map<String, LongAdder> loadedClasses,
+      Map<MethodKey, LongAdder> hotMethods) {
+    ClassLoader loader = Thread.currentThread().getContextClassLoader();
+    if (loader == null) {
+      loader = ClassLoader.getSystemClassLoader();
+    }
+
     List<Profile.PreloadEntry> preload = new ArrayList<>();
     for (Map.Entry<String, LongAdder> e : loadedClasses.entrySet()) {
-      // TODO(M3): compute SHA-256 of class file bytes; empty digest is a placeholder.
-      preload.add(new Profile.PreloadEntry(e.getKey(), ""));
+      String digest;
+      try {
+        String computed = ClassDigest.forClass(e.getKey(), loader);
+        digest = computed == null ? "" : computed;
+      } catch (IOException ex) {
+        logger.log(Level.FINE, "digest failed for " + e.getKey(), ex);
+        digest = "";
+      }
+      preload.add(new Profile.PreloadEntry(e.getKey(), digest));
     }
     loadedClasses.clear();
 
     List<Profile.CompileEntry> compile = new ArrayList<>();
-    for (Map.Entry<String, LongAdder> e : hotMethods.entrySet()) {
-      String key = e.getKey();
-      int hash = key.indexOf('#');
-      String className = hash < 0 ? key : key.substring(0, hash);
-      String methodName = hash < 0 ? "" : key.substring(hash + 1);
-      // TODO(M3): capture descriptor from the JFR event and pick a real tier.
-      compile.add(new Profile.CompileEntry(className, methodName, "", 0));
+    for (Map.Entry<MethodKey, LongAdder> e : hotMethods.entrySet()) {
+      MethodKey k = e.getKey();
+      compile.add(new Profile.CompileEntry(k.className, k.methodName, k.descriptor, ADVISORY_TIER));
     }
     hotMethods.clear();
 
@@ -216,6 +232,34 @@ public final class Engine {
           "telemetry sent: " + preload.size() + " classes, " + compile.size() + " hot methods");
     } catch (IOException e) {
       logger.log(Level.WARNING, "failed to send telemetry sample", e);
+    }
+  }
+
+  private static final class MethodKey {
+    final String className;
+    final String methodName;
+    final String descriptor;
+
+    MethodKey(String className, String methodName, String descriptor) {
+      this.className = className;
+      this.methodName = methodName;
+      this.descriptor = descriptor;
+    }
+
+    @Override
+    public boolean equals(Object o) {
+      if (!(o instanceof MethodKey)) {
+        return false;
+      }
+      MethodKey k = (MethodKey) o;
+      return className.equals(k.className)
+          && methodName.equals(k.methodName)
+          && descriptor.equals(k.descriptor);
+    }
+
+    @Override
+    public int hashCode() {
+      return Objects.hash(className, methodName, descriptor);
     }
   }
 

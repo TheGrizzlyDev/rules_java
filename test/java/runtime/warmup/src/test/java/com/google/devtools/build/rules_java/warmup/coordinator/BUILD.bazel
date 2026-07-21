@@ -16,6 +16,19 @@ java_test(
     ],
 )
 
+java_test(
+    name = "FrequencyProfileTest",
+    srcs = ["FrequencyProfileTest.java"],
+    test_class = "com.google.devtools.build.rules_java.warmup.coordinator.FrequencyProfileTest",
+    deps = [
+        ":guava",
+        ":truth",
+        "//java/runtime/warmup/src/main/java/com/google/devtools/build/rules_java/warmup/common",
+        "//java/runtime/warmup/src/main/java/com/google/devtools/build/rules_java/warmup/common/wire",
+        "//java/runtime/warmup/src/main/java/com/google/devtools/build/rules_java/warmup/coordinator:coordinator_lib",
+    ],
+)
+
 java_import(
     name = "guava",
     jars = ["@guava//file"],

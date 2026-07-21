@@ -28,7 +28,6 @@ import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.Collection;
-import java.util.Collections;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.Level;
@@ -43,14 +42,31 @@ public final class Coordinator {
 
   private static final Logger logger = Logger.getLogger(Coordinator.class.getName());
 
+  /** Defaults for snapshot ranking. CLI/config will make these tunable. */
+  private static final int DEFAULT_TOP_CLASSES = 500;
+
+  private static final int DEFAULT_TOP_METHODS = 200;
+  private static final int DEFAULT_MIN_COUNT = 1;
+
   private final int port;
+  private final int topClasses;
+  private final int topMethods;
+  private final int minCount;
+  private final FrequencyProfile profile = new FrequencyProfile();
   private final SessionRegistry sessions = new SessionRegistry();
   private final AtomicInteger connectionCounter = new AtomicInteger();
   private volatile ServerSocket server;
   private volatile Thread acceptThread;
 
   public Coordinator(int port) {
+    this(port, DEFAULT_TOP_CLASSES, DEFAULT_TOP_METHODS, DEFAULT_MIN_COUNT);
+  }
+
+  public Coordinator(int port, int topClasses, int topMethods, int minCount) {
     this.port = port;
+    this.topClasses = topClasses;
+    this.topMethods = topMethods;
+    this.minCount = minCount;
   }
 
   /** Binds the listen socket and returns the bound port. Non-blocking; call {@link #serve()}. */
@@ -175,9 +191,10 @@ public final class Coordinator {
   private void onMessage(Session session, Object message) throws IOException {
     if (message instanceof SnapshotRequest) {
       logger.info("connection " + session.id() + " -> snapshot request");
-      session.sendSnapshotReply(emptyProfile());
+      session.sendSnapshotReply(profile.snapshot(topClasses, topMethods, minCount));
     } else if (message instanceof TelemetrySample) {
       TelemetrySample sample = (TelemetrySample) message;
+      profile.merge(sample);
       logger.info(
           "connection "
               + session.id()
@@ -192,10 +209,9 @@ public final class Coordinator {
     }
   }
 
-  private static Profile emptyProfile() {
-    return new Profile(
-        Collections.<Profile.PreloadEntry>emptyList(),
-        Collections.<Profile.CompileEntry>emptyList());
+  /** Test-only view of the merged profile. */
+  FrequencyProfile profile() {
+    return profile;
   }
 
   // ---- CLI ----

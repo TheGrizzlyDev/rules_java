@@ -158,6 +158,48 @@ public final class CoordinatorTest {
   }
 
   @Test
+  public void telemetryPopulatesProfileForNextSnapshot() throws Exception {
+    // First client reports telemetry.
+    try (Client first = Client.connect(port)) {
+      first.sendSnapshot();
+      assertThat(first.read()).isInstanceOf(Profile.class);
+      first.sendTelemetry(
+          new TelemetrySample(
+              Collections.singletonList(new Profile.PreloadEntry("com.example.Hot", "deadbeef")),
+              Collections.singletonList(
+                  new Profile.CompileEntry("com.example.Hot", "run", "()V", 4))));
+      awaitProfileMerged("com.example.Hot", "deadbeef");
+    }
+
+    // Second client's snapshot should see the merged entry.
+    try (Client second = Client.connect(port)) {
+      second.sendSnapshot();
+      Object reply = second.read();
+      assertThat(reply).isInstanceOf(Profile.class);
+      Profile profile = (Profile) reply;
+      assertThat(profile.preload()).hasSize(1);
+      assertThat(profile.preload().get(0).fqClassName()).isEqualTo("com.example.Hot");
+      assertThat(profile.preload().get(0).sha256DigestHex()).isEqualTo("deadbeef");
+      assertThat(profile.compile()).hasSize(1);
+      assertThat(profile.compile().get(0).methodName()).isEqualTo("run");
+      assertThat(profile.compile().get(0).descriptor()).isEqualTo("()V");
+    }
+  }
+
+  private void awaitProfileMerged(String fqClassName, String digest) throws InterruptedException {
+    long deadline = System.currentTimeMillis() + 2000;
+    while (System.currentTimeMillis() < deadline) {
+      String seen = coordinator.profile().lastDigest(fqClassName);
+      if (digest.equals(seen)) {
+        return;
+      }
+      Thread.sleep(10);
+    }
+    throw new AssertionError(
+        "profile never observed " + fqClassName + " with digest " + digest);
+  }
+
+  @Test
   public void promoteBeforeSnapshotIsRejected() {
     assertThrows(IllegalArgumentException.class, () -> coordinator.promote(999, "no such session"));
   }
