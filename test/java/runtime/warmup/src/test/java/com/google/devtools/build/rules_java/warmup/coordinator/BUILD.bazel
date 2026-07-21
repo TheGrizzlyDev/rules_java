@@ -4,14 +4,15 @@ load("@rules_java//java:java_test.bzl", "java_test")
 package(default_applicable_licenses = ["@rules_java//:license"])
 
 java_test(
-    name = "CodecTest",
-    srcs = ["CodecTest.java"],
-    test_class = "com.google.devtools.build.rules_java.warmup.common.wire.CodecTest",
+    name = "CoordinatorTest",
+    srcs = ["CoordinatorTest.java"],
+    test_class = "com.google.devtools.build.rules_java.warmup.coordinator.CoordinatorTest",
     deps = [
         ":guava",
         ":truth",
         "//java/runtime/warmup/src/main/java/com/google/devtools/build/rules_java/warmup/common",
         "//java/runtime/warmup/src/main/java/com/google/devtools/build/rules_java/warmup/common/wire",
+        "//java/runtime/warmup/src/main/java/com/google/devtools/build/rules_java/warmup/coordinator:coordinator_lib",
     ],
 )
 

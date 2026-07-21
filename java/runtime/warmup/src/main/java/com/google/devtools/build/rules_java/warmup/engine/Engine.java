@@ -37,9 +37,11 @@ import jdk.jfr.consumer.RecordingStream;
 
 /**
  * Warming-JVM engine: connects to the coordinator on TCP loopback, requests a snapshot, then reads
- * {@link com.google.devtools.build.rules_java.warmup.common.wire.ServerEvent}s until promoted. A
- * background JFR subscriber tallies class loads and execution samples and periodically ships a
- * {@link TelemetrySample} back to the coordinator.
+ * {@link com.google.devtools.build.rules_java.warmup.common.wire.ServerEvent}s until promoted.
+ *
+ * <p>Telemetry reporting only starts <em>after</em> promotion. Class loads and execution samples
+ * observed during the warming phase are noise (the engine's own scaffolding); the signal we want
+ * for the profile is what happens once the test starts using the JVM.
  */
 public final class Engine {
 
@@ -76,16 +78,17 @@ public final class Engine {
               + profile.compile().size()
               + " compile");
 
+      readWarmupEvents(in);
+
+      // Promotion happened. Start telemetry now — everything observed from this point on is what
+      // the test is actually driving.
       Thread reporter = startTelemetryReporter(out);
-      try {
-        readEvents(in);
-      } finally {
-        reporter.interrupt();
-      }
+      awaitTestExit(in, reporter);
     }
   }
 
-  private void readEvents(InputStream in) throws IOException {
+  /** Reads warmup-phase events until a {@link PromoteRequest} arrives. */
+  private void readWarmupEvents(InputStream in) throws IOException {
     while (true) {
       Object event = Codec.read(in);
       if (event instanceof WarmupUpdate) {
@@ -106,6 +109,27 @@ public final class Engine {
       } else {
         logger.warning("unexpected event: " + event.getClass().getSimpleName());
       }
+    }
+  }
+
+  /**
+   * After promotion, keeps the socket alive so the telemetry reporter can push samples. Returns
+   * when the coordinator closes the connection or the read stream fails; the reporter is
+   * interrupted before we leave.
+   *
+   * <p>TODO(M5): replace this with the actual test-runner handoff. For now the engine just idles
+   * post-promotion so telemetry keeps flowing.
+   */
+  private void awaitTestExit(InputStream in, Thread reporter) {
+    try {
+      while (in.read() >= 0) {
+        // Coordinator isn't expected to send more messages after promoting; anything that arrives
+        // is drained until the peer closes.
+      }
+    } catch (IOException e) {
+      logger.log(Level.FINE, "post-promotion read ended", e);
+    } finally {
+      reporter.interrupt();
     }
   }
 

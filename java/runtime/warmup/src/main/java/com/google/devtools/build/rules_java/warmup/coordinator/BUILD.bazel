@@ -6,6 +6,7 @@ package(default_applicable_licenses = ["@rules_java//:license"])
 java_library(
     name = "coordinator_lib",
     srcs = glob(["*.java"]),
+    visibility = ["//test/java/runtime/warmup:__subpackages__"],
     deps = [
         "//java/runfiles",
         "//java/runtime/warmup/src/main/java/com/google/devtools/build/rules_java/warmup/common",

@@ -15,100 +15,180 @@ package com.google.devtools.build.rules_java.warmup.coordinator;
 
 import com.google.devtools.build.rules_java.warmup.common.Profile;
 import com.google.devtools.build.rules_java.warmup.common.wire.Codec;
+import com.google.devtools.build.rules_java.warmup.common.wire.PromoteRequest;
 import com.google.devtools.build.rules_java.warmup.common.wire.SnapshotRequest;
+import com.google.devtools.build.rules_java.warmup.common.wire.StateStaleNotice;
 import com.google.devtools.build.rules_java.warmup.common.wire.TelemetrySample;
+import com.google.devtools.build.rules_java.warmup.common.wire.WarmupUpdate;
 import com.google.devtools.build.runfiles.Runfiles;
 import java.io.EOFException;
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.util.Collection;
 import java.util.Collections;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
  * Warmup coordinator: listens on a TCP loopback port, accepts connections from warming and running
- * JVMs, and speaks the wire protocol defined in {@code common.wire}.
+ * JVMs, and speaks the wire protocol defined in {@code common.wire}. Provides an admin API for
+ * pushing events at specific engines.
  */
 public final class Coordinator {
 
   private static final Logger logger = Logger.getLogger(Coordinator.class.getName());
 
   private final int port;
-  private final int engineCount;
-  private final String engineRlocation;
+  private final SessionRegistry sessions = new SessionRegistry();
   private final AtomicInteger connectionCounter = new AtomicInteger();
+  private volatile ServerSocket server;
+  private volatile Thread acceptThread;
 
-  public Coordinator(int port, int engineCount, String engineRlocation) {
+  public Coordinator(int port) {
     this.port = port;
-    this.engineCount = engineCount;
-    this.engineRlocation = engineRlocation;
   }
 
-  public void run() throws IOException {
-    Runfiles runfiles = Runfiles.create();
+  /** Binds the listen socket and returns the bound port. Non-blocking; call {@link #serve()}. */
+  public int bind() throws IOException {
     InetSocketAddress address = new InetSocketAddress(InetAddress.getLoopbackAddress(), port);
-    try (ServerSocket server = new ServerSocket()) {
-      server.bind(address);
-      int boundPort = server.getLocalPort();
-      logger.info("coordinator listening on " + server.getLocalSocketAddress());
+    ServerSocket s = new ServerSocket();
+    s.bind(address);
+    server = s;
+    logger.info("coordinator listening on " + s.getLocalSocketAddress());
+    return s.getLocalPort();
+  }
 
-      EngineLauncher launcher = new EngineLauncher(runfiles, engineRlocation, boundPort);
-      for (int i = 0; i < engineCount; i++) {
-        launcher.spawn(i);
-      }
-
-      while (true) {
-        Socket client = server.accept();
+  /** Blocks accepting connections until {@link #stop()} is called. */
+  public void serve() throws IOException {
+    if (server == null) {
+      throw new IllegalStateException("bind() must be called before serve()");
+    }
+    acceptThread = Thread.currentThread();
+    try {
+      while (!server.isClosed()) {
+        Socket client;
+        try {
+          client = server.accept();
+        } catch (IOException e) {
+          if (server.isClosed()) {
+            return;
+          }
+          throw e;
+        }
         int id = connectionCounter.incrementAndGet();
-        Thread t = new Thread(() -> handle(id, client), "warmup-conn-" + id);
+        Session session;
+        try {
+          session = new Session(id, client);
+        } catch (IOException e) {
+          logger.log(Level.WARNING, "connection " + id + " setup failed", e);
+          try {
+            client.close();
+          } catch (IOException ignored) {
+            // best effort
+          }
+          continue;
+        }
+        sessions.register(session);
+        Thread t = new Thread(() -> readLoop(session), "warmup-conn-" + id);
         t.setDaemon(true);
         t.start();
       }
+    } finally {
+      acceptThread = null;
     }
   }
 
-  private void handle(int id, Socket client) {
-    logger.info("connection " + id + " opened");
-    try (Socket c = client;
-        InputStream in = c.getInputStream();
-        OutputStream out = c.getOutputStream()) {
+  /** Closes the listen socket and every live session. */
+  public void stop() {
+    ServerSocket s = server;
+    if (s != null) {
+      try {
+        s.close();
+      } catch (IOException ignored) {
+        // best effort
+      }
+    }
+    for (Session session : sessions.all()) {
+      session.close();
+    }
+  }
+
+  // ---- admin API ----
+
+  public Collection<Session> sessions() {
+    return sessions.all();
+  }
+
+  public Optional<Session> pickWarming() {
+    return sessions.pickWarming();
+  }
+
+  public void promote(int sessionId, String reason) throws IOException {
+    Session session = requireSession(sessionId);
+    session.sendPromoteRequest(new PromoteRequest("warmer-" + sessionId, reason));
+  }
+
+  public void sendWarmupUpdate(int sessionId, WarmupUpdate update) throws IOException {
+    requireSession(sessionId).sendWarmupUpdate(update);
+  }
+
+  public void sendStale(int sessionId, StateStaleNotice notice) throws IOException {
+    requireSession(sessionId).sendStaleNotice(notice);
+  }
+
+  private Session requireSession(int id) {
+    Session s = sessions.get(id);
+    if (s == null) {
+      throw new IllegalArgumentException("no such session: " + id);
+    }
+    return s;
+  }
+
+  // ---- per-connection reader ----
+
+  private void readLoop(Session session) {
+    logger.info("connection " + session.id() + " opened");
+    try {
       while (true) {
         Object message;
         try {
-          message = Codec.read(in);
+          message = Codec.read(session.input());
         } catch (EOFException e) {
-          logger.info("connection " + id + " closed by peer");
+          logger.info("connection " + session.id() + " closed by peer");
           return;
         }
-        onMessage(id, message, out);
+        onMessage(session, message);
       }
     } catch (IOException e) {
-      logger.log(Level.WARNING, "connection " + id + " error", e);
+      logger.log(Level.WARNING, "connection " + session.id() + " error", e);
+    } finally {
+      session.close();
+      sessions.remove(session.id());
     }
   }
 
-  private void onMessage(int id, Object message, OutputStream out) throws IOException {
+  private void onMessage(Session session, Object message) throws IOException {
     if (message instanceof SnapshotRequest) {
-      logger.info("connection " + id + " -> snapshot request");
-      Codec.writeProfile(out, emptyProfile());
+      logger.info("connection " + session.id() + " -> snapshot request");
+      session.sendSnapshotReply(emptyProfile());
     } else if (message instanceof TelemetrySample) {
       TelemetrySample sample = (TelemetrySample) message;
       logger.info(
           "connection "
-              + id
+              + session.id()
               + " -> telemetry: "
               + sample.loadedClasses().size()
               + " classes, "
               + sample.hotMethods().size()
               + " hot methods");
     } else {
-      logger.warning("connection " + id + " -> unexpected " + message.getClass().getSimpleName());
+      logger.warning(
+          "connection " + session.id() + " -> unexpected " + message.getClass().getSimpleName());
     }
   }
 
@@ -117,6 +197,8 @@ public final class Coordinator {
         Collections.<Profile.PreloadEntry>emptyList(),
         Collections.<Profile.CompileEntry>emptyList());
   }
+
+  // ---- CLI ----
 
   public static void main(String[] args) throws IOException {
     if (args.length != 3) {
@@ -129,6 +211,16 @@ public final class Coordinator {
     int port = Integer.parseInt(args[0]);
     int engineCount = Integer.parseInt(args[1]);
     String engineRlocation = args[2];
-    new Coordinator(port, engineCount, engineRlocation).run();
+
+    Runfiles runfiles = Runfiles.create();
+    Coordinator coordinator = new Coordinator(port);
+    int boundPort = coordinator.bind();
+
+    EngineLauncher launcher = new EngineLauncher(runfiles, engineRlocation, boundPort);
+    for (int i = 0; i < engineCount; i++) {
+      launcher.spawn(i);
+    }
+
+    coordinator.serve();
   }
 }
