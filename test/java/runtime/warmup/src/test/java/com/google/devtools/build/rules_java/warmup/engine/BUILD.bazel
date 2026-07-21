@@ -1,0 +1,27 @@
+load("@rules_java//java:java_import.bzl", "java_import")
+load("@rules_java//java:java_test.bzl", "java_test")
+
+package(default_applicable_licenses = ["@rules_java//:license"])
+
+java_test(
+    name = "PreloaderTest",
+    srcs = ["PreloaderTest.java"],
+    javacopts = ["--release", "17"],
+    test_class = "com.google.devtools.build.rules_java.warmup.engine.PreloaderTest",
+    deps = [
+        ":guava",
+        ":truth",
+        "//java/runtime/warmup/src/main/java/com/google/devtools/build/rules_java/warmup/common",
+        "//java/runtime/warmup/src/main/java/com/google/devtools/build/rules_java/warmup/engine:engine_lib",
+    ],
+)
+
+java_import(
+    name = "guava",
+    jars = ["@guava//file"],
+)
+
+java_import(
+    name = "truth",
+    jars = ["@truth//file"],
+)

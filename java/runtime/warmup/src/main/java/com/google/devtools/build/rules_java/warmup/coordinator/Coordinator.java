@@ -232,7 +232,9 @@ public final class Coordinator {
     Coordinator coordinator = new Coordinator(port);
     int boundPort = coordinator.bind();
 
-    EngineLauncher launcher = new EngineLauncher(runfiles, engineRlocation, boundPort);
+    EngineLauncher launcher =
+        new EngineLauncher(
+            runfiles, engineRlocation, boundPort, EngineLauncher.resolveWhiteboxJar());
     for (int i = 0; i < engineCount; i++) {
       launcher.spawn(i);
     }

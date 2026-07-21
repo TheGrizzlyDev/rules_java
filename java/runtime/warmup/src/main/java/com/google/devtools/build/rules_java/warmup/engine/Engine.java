@@ -56,6 +56,7 @@ public final class Engine {
 
   private final int port;
   private final Object writeLock = new Object();
+  private Preloader preloader;
 
   public Engine(int port) {
     this.port = port;
@@ -82,6 +83,11 @@ public final class Engine {
               + profile.compile().size()
               + " compile");
 
+      ClassLoader classpath = ClassLoader.getSystemClassLoader();
+      preloader = new Preloader(classpath, JitEnqueuer.detect(logger));
+      preloader.applyPreload(profile.preload());
+      preloader.applyCompile(profile.compile());
+
       readWarmupEvents(in);
 
       // Promotion happened. Start telemetry now — everything observed from this point on is what
@@ -103,6 +109,8 @@ public final class Engine {
                 + " preload, +"
                 + u.compile().size()
                 + " compile");
+        preloader.applyPreload(u.preload());
+        preloader.applyCompile(u.compile());
       } else if (event instanceof StateStaleNotice) {
         StateStaleNotice n = (StateStaleNotice) event;
         logger.info("stale: " + n.fqClassName() + " (" + n.reason() + ")");
@@ -199,6 +207,7 @@ public final class Engine {
     }
 
     List<Profile.PreloadEntry> preload = new ArrayList<>();
+    Map<String, String> corrections = drainCorrections();
     for (Map.Entry<String, LongAdder> e : loadedClasses.entrySet()) {
       String digest;
       try {
@@ -209,8 +218,12 @@ public final class Engine {
         digest = "";
       }
       preload.add(new Profile.PreloadEntry(e.getKey(), digest));
+      corrections.remove(e.getKey());
     }
     loadedClasses.clear();
+    for (Map.Entry<String, String> c : corrections.entrySet()) {
+      preload.add(new Profile.PreloadEntry(c.getKey(), c.getValue()));
+    }
 
     List<Profile.CompileEntry> compile = new ArrayList<>();
     for (Map.Entry<MethodKey, LongAdder> e : hotMethods.entrySet()) {
@@ -233,6 +246,17 @@ public final class Engine {
     } catch (IOException e) {
       logger.log(Level.WARNING, "failed to send telemetry sample", e);
     }
+  }
+
+  /** Returns and clears the pending set of corrected digests from the preloader. */
+  private Map<String, String> drainCorrections() {
+    if (preloader == null) {
+      return new java.util.HashMap<>();
+    }
+    Map<String, String> pending = preloader.correctedDigests();
+    Map<String, String> copy = new java.util.HashMap<>(pending);
+    pending.keySet().removeAll(copy.keySet());
+    return copy;
   }
 
   private static final class MethodKey {
