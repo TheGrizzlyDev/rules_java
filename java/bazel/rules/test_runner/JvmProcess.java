@@ -19,10 +19,12 @@ import java.util.List;
 final class JvmProcess {
 
   static final class ClasspathEntry {
+    final String label;
     final String path;
     final String sha256;
 
-    ClasspathEntry(String path, String sha256) {
+    ClasspathEntry(String label, String path, String sha256) {
+      this.label = label;
       this.path = path;
       this.sha256 = sha256;
     }

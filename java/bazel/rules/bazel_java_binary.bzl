@@ -332,7 +332,10 @@ def _create_test_runner_wrapper(
     workspace_prefix_for_map = workspace_prefix
     config_args.add_all(
         classpath,
-        map_each = lambda f: "classpath_entry=" + paths.normalize(workspace_prefix_for_map + f.short_path),
+        map_each = lambda f: [
+            "classpath_entry_label=" + str(f.owner),
+            "classpath_entry_path=" + paths.normalize(workspace_prefix_for_map + f.short_path),
+        ],
         allow_closure = True,
     )
     driver_jars = ctx.attr._jvm_driver[JavaInfo].transitive_runtime_jars

@@ -22,13 +22,23 @@ import java.util.Collections;
 import java.util.List;
 
 final class Config {
+  static final class ClasspathEntry {
+    final String label;
+    final String path;
+
+    ClasspathEntry(String label, String path) {
+      this.label = label;
+      this.path = path;
+    }
+  }
+
   final String workspacePrefix;
   final String javabin;
   final String mainClass;
   final String coverageMainClass;
   final String driverMain;
   final List<String> jvmFlags;
-  final List<String> classpath;
+  final List<ClasspathEntry> classpath;
   final List<String> driverClasspath;
 
   private Config(
@@ -38,7 +48,7 @@ final class Config {
       String coverageMainClass,
       String driverMain,
       List<String> jvmFlags,
-      List<String> classpath,
+      List<ClasspathEntry> classpath,
       List<String> driverClasspath) {
     this.workspacePrefix = workspacePrefix;
     this.javabin = javabin;
@@ -57,8 +67,9 @@ final class Config {
     String coverageMainClass = null;
     String driverMain = null;
     List<String> jvmFlags = new ArrayList<>();
-    List<String> classpath = new ArrayList<>();
+    List<ClasspathEntry> classpath = new ArrayList<>();
     List<String> driverClasspath = new ArrayList<>();
+    String pendingClasspathLabel = null;
     for (String line : Files.readAllLines(file, StandardCharsets.UTF_8)) {
       int eq = line.indexOf('=');
       if (eq < 0) {
@@ -85,8 +96,20 @@ final class Config {
         case "jvm_flag":
           jvmFlags.add(value);
           break;
-        case "classpath_entry":
-          classpath.add(value);
+        case "classpath_entry_label":
+          if (pendingClasspathLabel != null) {
+            throw new IllegalStateException(
+                "classpath_entry_label without matching classpath_entry_path in " + file);
+          }
+          pendingClasspathLabel = value;
+          break;
+        case "classpath_entry_path":
+          if (pendingClasspathLabel == null) {
+            throw new IllegalStateException(
+                "classpath_entry_path without preceding classpath_entry_label in " + file);
+          }
+          classpath.add(new ClasspathEntry(pendingClasspathLabel, value));
+          pendingClasspathLabel = null;
           break;
         case "driver_classpath_entry":
           driverClasspath.add(value);
@@ -94,6 +117,10 @@ final class Config {
         default:
           throw new IllegalArgumentException("unknown config key: " + key);
       }
+    }
+    if (pendingClasspathLabel != null) {
+      throw new IllegalStateException(
+          "trailing classpath_entry_label without path in " + file);
     }
     if (javabin == null || mainClass == null) {
       throw new IllegalStateException("javabin and main_class are required in " + file);

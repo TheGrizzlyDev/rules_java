@@ -76,8 +76,8 @@ public final class PersistentTestRunner {
     for (String entry : config.driverClasspath) {
       classpath.add(resolveRunfile(runfiles, entry));
     }
-    for (String entry : config.classpath) {
-      classpath.add(resolveRunfile(runfiles, entry));
+    for (Config.ClasspathEntry entry : config.classpath) {
+      classpath.add(resolveRunfile(runfiles, entry.path));
     }
     if (wrapperArgs.mainAdviceClasspath != null && !wrapperArgs.mainAdviceClasspath.isEmpty()) {
       classpath.add(0, wrapperArgs.mainAdviceClasspath);
@@ -122,7 +122,12 @@ public final class PersistentTestRunner {
 
     List<JvmProcess.ClasspathEntry> tracked = new ArrayList<>();
     for (int i = 0; i < config.classpath.size(); i++) {
-      tracked.add(new JvmProcess.ClasspathEntry(config.classpath.get(i), sha256(classpath.get(i + config.driverClasspath.size()))));
+      Config.ClasspathEntry entry = config.classpath.get(i);
+      tracked.add(
+          new JvmProcess.ClasspathEntry(
+              entry.label,
+              entry.path,
+              sha256(classpath.get(i + config.driverClasspath.size()))));
     }
 
     List<String> mergedJvmFlags = new ArrayList<>(config.jvmFlags);
@@ -177,7 +182,8 @@ public final class PersistentTestRunner {
     }
     sb.append("  classpath:\n");
     for (JvmProcess.ClasspathEntry entry : p.classpath) {
-      sb.append("    ").append(entry.sha256).append("  ").append(entry.path).append('\n');
+      sb.append("    ").append(entry.sha256).append("  ").append(entry.label);
+      sb.append("  (").append(entry.path).append(")\n");
     }
     System.err.print(sb);
   }
