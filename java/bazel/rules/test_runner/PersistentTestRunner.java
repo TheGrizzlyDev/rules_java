@@ -130,9 +130,18 @@ public final class PersistentTestRunner {
               sha256(classpath.get(i + config.driverClasspath.size()))));
     }
 
+    JvmProcess reusable = findReusable(tracked);
+    if (reusable != null) {
+      // TODO: dispatch this test into the reusable JVM instead of spawning a fresh one.
+      // Requires an IPC channel to the driver process. For now, log and fall through.
+      System.err.println(
+          "[persistent-test-runner] would reuse an idle JVM with matching classpath (dispatch not yet implemented)");
+    }
+
     List<String> mergedJvmFlags = new ArrayList<>(config.jvmFlags);
     mergedJvmFlags.addAll(wrapperArgs.jvmFlagsCmdline);
 
+    // TODO: cap the number of concurrently running JVMs.
     ProcessBuilder pb = new ProcessBuilder(command).inheritIO();
     pb.environment().put("JACOCO_IS_JAR_WRAPPED", useClasspathJar ? "1" : "0");
     pb.environment().put("CLASSPATH_JAR", useClasspathJar ? classpathJar.getFileName().toString() : "");
@@ -150,12 +159,48 @@ public final class PersistentTestRunner {
     spawnedJvms.add(tracker);
     logSpawnedJvm(tracker);
 
-    int exitCode = awaitStatus(statusFile, process);
+    int exitCode;
+    try {
+      exitCode = awaitStatus(statusFile, process);
+    } finally {
+      tracker.release();
+    }
 
     if (classpathJar != null) {
       Files.deleteIfExists(classpathJar);
     }
     return exitCode;
+  }
+
+  private JvmProcess findReusable(List<JvmProcess.ClasspathEntry> requested) {
+    for (JvmProcess jvm : spawnedJvms) {
+      if (!jvm.process.isAlive()) {
+        continue;
+      }
+      if (!isCompatible(jvm.classpath, requested)) {
+        continue;
+      }
+      if (jvm.tryClaim()) {
+        return jvm;
+      }
+    }
+    return null;
+  }
+
+  private static boolean isCompatible(
+      List<JvmProcess.ClasspathEntry> existing, List<JvmProcess.ClasspathEntry> requested) {
+    // For every entry that appears in both (matched by label OR by path — logical OR),
+    // require identical digests. Entries present in only one side don't participate.
+    for (JvmProcess.ClasspathEntry req : requested) {
+      for (JvmProcess.ClasspathEntry ex : existing) {
+        if (req.label.equals(ex.label) || req.path.equals(ex.path)) {
+          if (!req.sha256.equals(ex.sha256)) {
+            return false;
+          }
+        }
+      }
+    }
+    return true;
   }
 
   private static int awaitStatus(Path statusFile, Process process) throws IOException, InterruptedException {

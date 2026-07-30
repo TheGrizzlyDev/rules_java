@@ -15,6 +15,7 @@ package com.google.devtools.build.java.testrunner;
 
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 final class JvmProcess {
 
@@ -35,10 +36,20 @@ final class JvmProcess {
   final List<String> jvmFlags;
   final List<ClasspathEntry> classpath;
 
+  private final AtomicBoolean busy = new AtomicBoolean(true);
+
   JvmProcess(Process process, String javabin, List<String> jvmFlags, List<ClasspathEntry> classpath) {
     this.process = process;
     this.javabin = javabin;
     this.jvmFlags = Collections.unmodifiableList(jvmFlags);
     this.classpath = Collections.unmodifiableList(classpath);
+  }
+
+  boolean tryClaim() {
+    return busy.compareAndSet(false, true);
+  }
+
+  void release() {
+    busy.set(false);
   }
 }
