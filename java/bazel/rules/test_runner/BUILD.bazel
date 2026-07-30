@@ -17,7 +17,12 @@ package(default_applicable_licenses = ["@rules_java//:license"])
 
 java_binary(
     name = "persistent_test_runner",
-    srcs = ["PersistentTestRunner.java"],
+    srcs = [
+        "Config.java",
+        "PersistentTestRunner.java",
+        "WrapperArgs.java",
+    ],
     main_class = "com.google.devtools.build.java.testrunner.PersistentTestRunner",
     visibility = ["//visibility:public"],
+    deps = ["//java/runfiles"],
 )

@@ -14,36 +14,46 @@
 # limitations under the License.
 
 set -o posix
-
-RUNFILES_MANIFEST_ONLY="%runfiles_manifest_only%"
+unset CLASSPATH
 
 case "$0" in
   /*) self="$0" ;;
   *)  self="$PWD/$0" ;;
 esac
 
-if [[ -z "$RUNFILES_DIR" && -z "$RUNFILES_MANIFEST_FILE" ]]; then
-  if [[ -d "${self}.runfiles" ]]; then
-    export RUNFILES_DIR="${self}.runfiles"
-  elif [[ -f "${self}.runfiles_manifest" ]]; then
-    export RUNFILES_MANIFEST_FILE="${self}.runfiles_manifest"
+if [[ -z "$JAVA_RUNFILES" ]]; then
+  while true; do
+    if [[ -e "$self.runfiles" ]]; then
+      JAVA_RUNFILES="$self.runfiles"
+      break
+    fi
+    if [[ $self == *.runfiles/* ]]; then
+      JAVA_RUNFILES="${self%.runfiles/*}.runfiles"
+      break
+    fi
+    if [[ ! -L "$self" ]]; then
+      break
+    fi
+    readlink="$(readlink "$self")"
+    if [[ "$readlink" = /* ]]; then
+      self="$readlink"
+    else
+      self="${self%/*}/$readlink"
+    fi
+  done
+  if [[ -z "$JAVA_RUNFILES" ]]; then
+    echo "$0: cannot locate runfiles directory" >&2
+    exit 1
   fi
 fi
 
-function rlocation() {
-  if [[ -n "$RUNFILES_DIR" ]]; then
-    echo "$RUNFILES_DIR/$1"
-  elif [[ -n "$RUNFILES_MANIFEST_FILE" ]]; then
-    grep -m1 "^$1 " "$RUNFILES_MANIFEST_FILE" | cut -d ' ' -f 2-
-  else
-    echo "$1"
-  fi
-}
+export JAVA_RUNFILES
+export TEST_SRCDIR="${TEST_SRCDIR:-$JAVA_RUNFILES}"
+export RUNFILES_DIR="${RUNFILES_DIR:-$JAVA_RUNFILES}"
+export RUNFILES_MANIFEST_FILE="${JAVA_RUNFILES}/MANIFEST"
+export RUNFILES_MANIFEST_ONLY=%runfiles_manifest_only%
+export SELF_LOCATION="$self"
 
-if [[ -n "$RUNFILES_DIR" ]]; then
-  export JAVA_RUNFILES="$RUNFILES_DIR"
-fi
-
-TEST_RUNNER=%test_runner%
-
-exec "$TEST_RUNNER" "$@"
+exec %test_runner% \
+  --config="${JAVA_RUNFILES}/%config_rlocation%" \
+  -- "$@"
