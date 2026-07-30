@@ -97,6 +97,15 @@ java_test(
                 allow_single_file = True,
                 default = "@bazel_tools//tools/test:collect_cc_coverage",
             ),
+            "_test_runner": attr.label(
+                cfg = "exec",
+                executable = True,
+                default = "@rules_java//java/bazel/rules/test_runner:persistent_test_runner",
+            ),
+            "_test_runner_wrapper_template": attr.label(
+                default = "@rules_java//java/bazel/rules:java_test_runner_wrapper_template.txt",
+                allow_single_file = True,
+            ),
         },
         override_attrs = {
             "use_testrunner": attr.bool(

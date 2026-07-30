@@ -105,6 +105,10 @@ def bazel_base_binary_impl(ctx, is_test_rule_class):
     if test_support:
         runfiles = runfiles.merge(test_support[DefaultInfo].default_runfiles)
 
+    test_runner = getattr(ctx.attr, "_test_runner", None)
+    if test_runner:
+        runfiles = runfiles.merge(test_runner[DefaultInfo].default_runfiles)
+
     providers["DefaultInfo"] = DefaultInfo(
         files = default_info.files,
         runfiles = runfiles,
@@ -228,11 +232,17 @@ def _create_stub(ctx, java_attrs, launcher, executable, jvm_flags, main_class, c
         ],
     )
 
+    test_runner = getattr(ctx.attr, "_test_runner", None)
+    test_runner_executable = ctx.executable._test_runner if test_runner else None
+
     if helper.is_target_platform_windows(ctx):
         jvm_flags_for_launcher = []
         for flag in jvm_flags:
             jvm_flags_for_launcher.extend(ctx.tokenize(flag))
-        return _create_windows_exe_launcher(ctx, java_executable, classpath, main_class, jvm_flags_for_launcher, runfiles_enabled, coverage_enabled, executable, coverage_main_class)
+        return _create_windows_exe_launcher(ctx, java_executable, classpath, main_class, jvm_flags_for_launcher, runfiles_enabled, coverage_enabled, executable, coverage_main_class, test_runner_executable)
+
+    if test_runner_executable:
+        return _create_test_runner_wrapper(ctx, executable, test_runner_executable, runfiles_enabled, workspace_prefix)
 
     if runfiles_enabled:
         prefix = "" if helper.is_absolute_target_platform_path(ctx, java_executable) else "${JAVA_RUNFILES}/"
@@ -277,8 +287,30 @@ def _format_classpath_entry(runfiles_enabled, workspace_prefix, file):
 
     return "$(rlocation " + paths.normalize(workspace_prefix + file.short_path) + ")"
 
-def _create_windows_exe_launcher(ctx, java_executable, classpath, main_class, jvm_flags_for_launcher, runfiles_enabled, coverage_enabled, executable, coverage_main_class):
+def _create_test_runner_wrapper(ctx, executable, test_runner_executable, runfiles_enabled, workspace_prefix):
+    if runfiles_enabled:
+        runner_ref = "${JAVA_RUNFILES}/" + workspace_prefix + test_runner_executable.short_path
+    else:
+        runner_ref = "$(rlocation " + paths.normalize(workspace_prefix + test_runner_executable.short_path) + ")"
+
+    ctx.actions.expand_template(
+        template = ctx.file._test_runner_wrapper_template,
+        output = executable,
+        substitutions = {
+            "%runfiles_manifest_only%": "" if runfiles_enabled else "1",
+            "%workspace_prefix%": workspace_prefix,
+            "%test_runner%": runner_ref,
+        },
+        is_executable = True,
+    )
+    return executable
+
+def _create_windows_exe_launcher(ctx, java_executable, classpath, main_class, jvm_flags_for_launcher, runfiles_enabled, coverage_enabled, executable, coverage_main_class, test_runner_executable = None):
     launch_info = ctx.actions.args().use_param_file("%s", use_always = True).set_param_file_format("multiline")
+    if test_runner_executable:
+        # TODO: implement the Windows launcher_maker path.
+        fail("test_runner attribute is not yet supported on Windows")
+
     launch_info.add("binary_type=Java")
     launch_info.add(ctx.workspace_name, format = "workspace_name=%s")
     launch_info.add("1" if runfiles_enabled else "0", format = "symlink_runfiles_enabled=%s")

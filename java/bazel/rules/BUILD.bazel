@@ -56,6 +56,7 @@ filegroup(
     srcs = [
         "BUILD.bazel",
         ":java_stub_template.txt",
+        ":java_test_runner_wrapper_template.txt",
         ":rules",
     ],
     visibility = ["//java:__pkg__"],
@@ -65,4 +66,9 @@ filegroup(
 exports_files(
     ["java_stub_template.txt"],
     visibility = ["@bazel_tools//tools/java:__pkg__"],
+)
+
+exports_files(
+    ["java_test_runner_wrapper_template.txt"],
+    visibility = ["//visibility:public"],
 )

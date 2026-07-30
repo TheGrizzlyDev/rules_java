@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# Copyright 2026 The Bazel Authors. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+set -o posix
+
+RUNFILES_MANIFEST_ONLY="%runfiles_manifest_only%"
+
+case "$0" in
+  /*) self="$0" ;;
+  *)  self="$PWD/$0" ;;
+esac
+
+if [[ -z "$RUNFILES_DIR" && -z "$RUNFILES_MANIFEST_FILE" ]]; then
+  if [[ -d "${self}.runfiles" ]]; then
+    export RUNFILES_DIR="${self}.runfiles"
+  elif [[ -f "${self}.runfiles_manifest" ]]; then
+    export RUNFILES_MANIFEST_FILE="${self}.runfiles_manifest"
+  fi
+fi
+
+function rlocation() {
+  if [[ -n "$RUNFILES_DIR" ]]; then
+    echo "$RUNFILES_DIR/$1"
+  elif [[ -n "$RUNFILES_MANIFEST_FILE" ]]; then
+    grep -m1 "^$1 " "$RUNFILES_MANIFEST_FILE" | cut -d ' ' -f 2-
+  else
+    echo "$1"
+  fi
+}
+
+if [[ -n "$RUNFILES_DIR" ]]; then
+  export JAVA_RUNFILES="$RUNFILES_DIR"
+fi
+
+TEST_RUNNER=%test_runner%
+
+exec "$TEST_RUNNER" "$@"
