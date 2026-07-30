@@ -16,9 +16,12 @@ package com.google.devtools.build.java.testrunner;
 import com.google.devtools.build.runfiles.Runfiles;
 import java.io.File;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.jar.Attributes;
@@ -29,6 +32,8 @@ public final class PersistentTestRunner {
 
   private static final int DEFAULT_CLASSPATH_LIMIT_UNIX = 120_000;
   private static final int DEFAULT_CLASSPATH_LIMIT_WINDOWS = 7_000;
+
+  private final List<JvmProcess> spawnedJvms = new ArrayList<>();
 
   private PersistentTestRunner() {}
 
@@ -59,12 +64,18 @@ public final class PersistentTestRunner {
       System.out.print(config.javabin);
       return 0;
     }
+    if (config.driverMain == null) {
+      throw new IllegalStateException("driver_main is required in the config");
+    }
 
     Runfiles runfiles = Runfiles.preload().unmapped();
 
     String javabin = resolveRunfile(runfiles, config.javabin);
 
     List<String> classpath = new ArrayList<>();
+    for (String entry : config.driverClasspath) {
+      classpath.add(resolveRunfile(runfiles, entry));
+    }
     for (String entry : config.classpath) {
       classpath.add(resolveRunfile(runfiles, entry));
     }
@@ -74,6 +85,9 @@ public final class PersistentTestRunner {
     String classpathString = String.join(File.pathSeparator, classpath);
     int limit = wrapperArgs.classpathLimit != null ? wrapperArgs.classpathLimit : classpathLimit();
     boolean useClasspathJar = classpathString.length() > limit;
+
+    Path statusFile = Files.createTempFile("persistent-test-runner-status-", "");
+    Files.delete(statusFile);
 
     List<String> command = new ArrayList<>();
     command.add(javabin);
@@ -88,6 +102,8 @@ public final class PersistentTestRunner {
     if (testTmpdir != null && !testTmpdir.isEmpty() && Files.isDirectory(Paths.get(testTmpdir))) {
       command.add("-Djava.io.tmpdir=" + testTmpdir);
     }
+    command.add("-Dbazel.persistent.test_main=" + config.mainClass);
+    command.add("-Dbazel.persistent.status_file=" + statusFile);
     command.addAll(config.jvmFlags);
     command.addAll(wrapperArgs.jvmFlagsCmdline);
     command.add("-classpath");
@@ -101,8 +117,16 @@ public final class PersistentTestRunner {
     if (wrapperArgs.mainAdvice != null) {
       command.add(wrapperArgs.mainAdvice);
     }
-    command.add(config.mainClass);
+    command.add(config.driverMain);
     command.addAll(wrapperArgs.programArgs);
+
+    List<JvmProcess.ClasspathEntry> tracked = new ArrayList<>();
+    for (int i = 0; i < config.classpath.size(); i++) {
+      tracked.add(new JvmProcess.ClasspathEntry(config.classpath.get(i), sha256(classpath.get(i + config.driverClasspath.size()))));
+    }
+
+    List<String> mergedJvmFlags = new ArrayList<>(config.jvmFlags);
+    mergedJvmFlags.addAll(wrapperArgs.jvmFlagsCmdline);
 
     ProcessBuilder pb = new ProcessBuilder(command).inheritIO();
     pb.environment().put("JACOCO_IS_JAR_WRAPPED", useClasspathJar ? "1" : "0");
@@ -116,12 +140,60 @@ public final class PersistentTestRunner {
     }
     ensureUtf8Locale(pb);
 
-    try {
-      return pb.start().waitFor();
-    } finally {
-      if (classpathJar != null) {
-        Files.deleteIfExists(classpathJar);
+    Process process = pb.start();
+    JvmProcess tracker = new JvmProcess(process, javabin, mergedJvmFlags, tracked);
+    spawnedJvms.add(tracker);
+    logSpawnedJvm(tracker);
+
+    int exitCode = awaitStatus(statusFile, process);
+
+    if (classpathJar != null) {
+      Files.deleteIfExists(classpathJar);
+    }
+    return exitCode;
+  }
+
+  private static int awaitStatus(Path statusFile, Process process) throws IOException, InterruptedException {
+    while (true) {
+      if (Files.exists(statusFile)) {
+        String contents = new String(Files.readAllBytes(statusFile), StandardCharsets.UTF_8).trim();
+        Files.deleteIfExists(statusFile);
+        return Integer.parseInt(contents);
       }
+      if (!process.isAlive()) {
+        return process.exitValue();
+      }
+      Thread.sleep(50);
+    }
+  }
+
+  private void logSpawnedJvm(JvmProcess p) {
+    StringBuilder sb = new StringBuilder();
+    sb.append("[persistent-test-runner] spawned JVM\n");
+    sb.append("  javabin: ").append(p.javabin).append('\n');
+    sb.append("  jvm_flags:\n");
+    for (String flag : p.jvmFlags) {
+      sb.append("    ").append(flag).append('\n');
+    }
+    sb.append("  classpath:\n");
+    for (JvmProcess.ClasspathEntry entry : p.classpath) {
+      sb.append("    ").append(entry.sha256).append("  ").append(entry.path).append('\n');
+    }
+    System.err.print(sb);
+  }
+
+  private static String sha256(String path) {
+    try {
+      MessageDigest md = MessageDigest.getInstance("SHA-256");
+      byte[] bytes = Files.readAllBytes(Paths.get(path));
+      byte[] digest = md.digest(bytes);
+      StringBuilder hex = new StringBuilder(digest.length * 2);
+      for (byte b : digest) {
+        hex.append(String.format("%02x", b));
+      }
+      return hex.toString();
+    } catch (IOException | NoSuchAlgorithmException e) {
+      return "unavailable";
     }
   }
 

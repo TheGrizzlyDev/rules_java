@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-load("//java:defs.bzl", "java_binary")
+load("//java:defs.bzl", "java_binary", "java_library")
 
 package(default_applicable_licenses = ["@rules_java//:license"])
 
@@ -19,10 +19,17 @@ java_binary(
     name = "persistent_test_runner",
     srcs = [
         "Config.java",
+        "JvmProcess.java",
         "PersistentTestRunner.java",
         "WrapperArgs.java",
     ],
     main_class = "com.google.devtools.build.java.testrunner.PersistentTestRunner",
     visibility = ["//visibility:public"],
     deps = ["//java/runfiles"],
+)
+
+java_library(
+    name = "jvm_driver",
+    srcs = ["JvmDriver.java"],
+    visibility = ["//visibility:public"],
 )

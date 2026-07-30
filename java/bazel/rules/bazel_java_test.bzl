@@ -17,6 +17,7 @@ load("//java/common:java_semantics.bzl", "semantics")
 load("//java/common/rules:java_binary.bzl", "BASE_TEST_ATTRIBUTES")
 load("//java/common/rules:rule_util.bzl", "merge_attrs")
 load("//java/common/rules/impl:java_binary_impl.bzl", "binary_provider_helper")
+load("//java/private:java_info.bzl", "JavaInfo")
 load(":bazel_java_binary.bzl", "BASE_BINARY_ATTRS", "bazel_base_binary_impl", "make_binary_rule")
 
 def _bazel_java_test_impl(ctx):
@@ -105,6 +106,10 @@ java_test(
             "_test_runner_wrapper_template": attr.label(
                 default = "@rules_java//java/bazel/rules:java_test_runner_wrapper_template.txt",
                 allow_single_file = True,
+            ),
+            "_jvm_driver": attr.label(
+                default = "@rules_java//java/bazel/rules/test_runner:jvm_driver",
+                providers = [JavaInfo],
             ),
         },
         override_attrs = {

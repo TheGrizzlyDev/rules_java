@@ -110,6 +110,10 @@ def bazel_base_binary_impl(ctx, is_test_rule_class):
     if test_runner:
         runfiles = runfiles.merge(test_runner[DefaultInfo].default_runfiles)
 
+    jvm_driver = getattr(ctx.attr, "_jvm_driver", None)
+    if jvm_driver:
+        runfiles = runfiles.merge(ctx.runfiles(transitive_files = depset(transitive = [jvm_driver[JavaInfo].transitive_runtime_jars])))
+
     if extra_runfiles:
         runfiles = runfiles.merge(ctx.runfiles(files = extra_runfiles))
 
@@ -320,6 +324,7 @@ def _create_test_runner_wrapper(
     config_args.add(workspace_prefix, format = "workspace_prefix=%s")
     config_args.add(java_executable, format = "javabin=%s")
     config_args.add(main_class, format = "main_class=%s")
+    config_args.add("com.google.devtools.build.java.testrunner.JvmDriver", format = "driver_main=%s")
     if coverage_enabled:
         config_args.add(coverage_main_class, format = "coverage_main_class=%s")
     for flag in jvm_flags:
@@ -328,6 +333,12 @@ def _create_test_runner_wrapper(
     config_args.add_all(
         classpath,
         map_each = lambda f: "classpath_entry=" + paths.normalize(workspace_prefix_for_map + f.short_path),
+        allow_closure = True,
+    )
+    driver_jars = ctx.attr._jvm_driver[JavaInfo].transitive_runtime_jars
+    config_args.add_all(
+        driver_jars,
+        map_each = lambda f: "driver_classpath_entry=" + paths.normalize(workspace_prefix_for_map + f.short_path),
         allow_closure = True,
     )
     ctx.actions.write(config, config_args)
