@@ -22,6 +22,7 @@ single_version_override(
     patch_strip = 1,
     patches = [
         "//third_party:protobuf_load-cc-rules.patch",
+        "//third_party:protobuf_add-cc-info-loads.patch",
     ],
     version = "32.1",
 )

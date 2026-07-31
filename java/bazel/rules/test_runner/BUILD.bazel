@@ -38,10 +38,11 @@ java_library(
 )
 
 java_binary(
-    name = "extension_scanner",
-    srcs = ["ExtensionScanner.java"],
-    main_class = "com.google.devtools.build.java.testrunner.ExtensionScanner",
+    name = "scan_jvm_test_runner_extensions",
+    srcs = ["ScanJvmTestRunnerExtensions.java"],
+    main_class = "com.google.devtools.build.java.testrunner.ScanJvmTestRunnerExtensions",
     visibility = ["//visibility:public"],
+    deps = ["//java/bazel/rules/test_runner/persistent_worker:persistent_worker_lib"],
 )
 
 java_binary(

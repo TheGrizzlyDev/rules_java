@@ -13,39 +13,47 @@
 // limitations under the License.
 package com.google.devtools.build.java.testrunner;
 
+import com.google.devtools.build.java.testrunner.persistent_worker.PersistentWorker;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.PrintStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
+import java.util.List;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 
-public final class ExtensionScanner {
+public final class ScanJvmTestRunnerExtensions {
 
   private static final String EXTENSIONS_RESOURCE =
       "META-INF/persistent-test-runner-extensions.txt";
 
-  private ExtensionScanner() {}
+  private ScanJvmTestRunnerExtensions() {}
 
-  public static void main(String[] args) throws IOException {
-    if (args.length != 2) {
-      System.err.println("Usage: ExtensionScanner <input.jar> <output.txt>");
-      System.exit(2);
+  public static void main(String[] args) throws Exception {
+    PersistentWorker.run(args, ScanJvmTestRunnerExtensions::scan);
+  }
+
+  static int scan(List<String> args, PrintStream stdout, PrintStream stderr) throws IOException {
+    if (args.size() != 2) {
+      stderr.println("Usage: ScanJvmTestRunnerExtensions <input.jar> <output.txt>");
+      return 2;
     }
-    Path input = Paths.get(args[0]);
-    Path output = Paths.get(args[1]);
+    Path input = Paths.get(args.get(0));
+    Path output = Paths.get(args.get(1));
 
     try (JarFile jar = new JarFile(input.toFile())) {
       JarEntry entry = jar.getJarEntry(EXTENSIONS_RESOURCE);
       if (entry == null) {
         Files.write(output, new byte[0]);
-        return;
+        return 0;
       }
       try (InputStream in = jar.getInputStream(entry)) {
         Files.copy(in, output, StandardCopyOption.REPLACE_EXISTING);
       }
     }
+    return 0;
   }
 }

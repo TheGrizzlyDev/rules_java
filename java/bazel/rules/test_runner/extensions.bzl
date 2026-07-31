@@ -16,12 +16,21 @@ def _scan_extensions_aspect_impl(target, ctx):
     if JavaInfo in target:
         for jar in target[JavaInfo].runtime_output_jars:
             out = ctx.actions.declare_file(jar.basename + ".extensions.txt")
+            args = ctx.actions.args()
+            args.use_param_file("@%s", use_always = True)
+            args.set_param_file_format("multiline")
+            args.add(jar)
+            args.add(out)
             ctx.actions.run(
                 executable = ctx.executable._scanner,
-                arguments = [jar.path, out.path],
+                arguments = [args],
                 inputs = [jar],
                 outputs = [out],
-                mnemonic = "ScanTestRunnerExtensions",
+                mnemonic = "ScanJvmTestRunnerExtensions",
+                execution_requirements = {
+                    "supports-workers": "1",
+                    "requires-worker-protocol": "proto",
+                },
             )
             direct.append(out)
 
@@ -42,7 +51,7 @@ scan_extensions_aspect = aspect(
     attr_aspects = _ATTRS_TO_TRAVERSE,
     attrs = {
         "_scanner": attr.label(
-            default = "//java/bazel/rules/test_runner:extension_scanner",
+            default = "//java/bazel/rules/test_runner:scan_jvm_test_runner_extensions",
             executable = True,
             cfg = "exec",
         ),
