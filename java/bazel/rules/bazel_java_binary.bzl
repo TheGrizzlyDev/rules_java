@@ -26,6 +26,7 @@ load("//java/common/rules:rule_util.bzl", "merge_attrs")
 load("//java/common/rules/impl:java_binary_deploy_jar.bzl", "create_deploy_archives")
 load("//java/common/rules/impl:java_binary_impl.bzl", "basic_java_binary", "binary_provider_helper")
 load("//java/common/rules/impl:java_helper.bzl", "helper")
+load("//java/bazel/rules/test_runner:extensions.bzl", "PersistentJvmTestRunnerExtensionInfo")
 load("//java/private:java_info.bzl", "JavaInfo")
 
 _JVM_TEST_TOOLCHAIN_TYPE = "//java/bazel/rules:jvm_test_toolchain_type"
@@ -351,6 +352,11 @@ def _create_test_runner_wrapper(
         map_each = lambda f: "driver_classpath_entry=" + paths.normalize(workspace_prefix_for_map + f.short_path),
         allow_closure = True,
     )
+
+    extensions_file = _aggregate_extension_class_lists(ctx)
+    if extensions_file:
+        config_args.add(paths.normalize(workspace_prefix + extensions_file.short_path), format = "extensions_file=%s")
+
     ctx.actions.write(config, config_args)
 
     config_rlocation = paths.normalize(workspace_prefix + config.short_path)
@@ -370,7 +376,37 @@ def _create_test_runner_wrapper(
         },
         is_executable = True,
     )
-    return [config]
+    extra = [config]
+    if extensions_file:
+        extra.append(extensions_file)
+    return extra
+
+def _aggregate_extension_class_lists(ctx):
+    aggregator = getattr(ctx.attr, "_extension_aggregator", None)
+    if aggregator == None:
+        return None
+
+    class_lists = depset(
+        transitive = [
+            dep[PersistentJvmTestRunnerExtensionInfo].class_lists
+            for attr_name in ("deps", "runtime_deps")
+            for dep in getattr(ctx.attr, attr_name, None) or []
+            if PersistentJvmTestRunnerExtensionInfo in dep
+        ],
+    )
+
+    output = ctx.actions.declare_file(ctx.label.name + "_extensions.txt")
+    args = ctx.actions.args()
+    args.add(output.path)
+    args.add_all(class_lists)
+    ctx.actions.run(
+        executable = ctx.executable._extension_aggregator,
+        arguments = [args],
+        inputs = class_lists,
+        outputs = [output],
+        mnemonic = "AggregateTestRunnerExtensions",
+    )
+    return output
 
 def _create_windows_exe_launcher(ctx, java_executable, classpath, main_class, jvm_flags_for_launcher, runfiles_enabled, coverage_enabled, executable, coverage_main_class, test_runner_executable = None):
     launch_info = ctx.actions.args().use_param_file("%s", use_always = True).set_param_file_format("multiline")

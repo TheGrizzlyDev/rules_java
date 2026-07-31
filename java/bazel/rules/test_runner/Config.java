@@ -37,6 +37,7 @@ final class Config {
   final String mainClass;
   final String coverageMainClass;
   final String driverMain;
+  final String extensionsFile;
   final List<String> jvmFlags;
   final List<ClasspathEntry> classpath;
   final List<String> driverClasspath;
@@ -47,6 +48,7 @@ final class Config {
       String mainClass,
       String coverageMainClass,
       String driverMain,
+      String extensionsFile,
       List<String> jvmFlags,
       List<ClasspathEntry> classpath,
       List<String> driverClasspath) {
@@ -55,6 +57,7 @@ final class Config {
     this.mainClass = mainClass;
     this.coverageMainClass = coverageMainClass;
     this.driverMain = driverMain;
+    this.extensionsFile = extensionsFile;
     this.jvmFlags = Collections.unmodifiableList(jvmFlags);
     this.classpath = Collections.unmodifiableList(classpath);
     this.driverClasspath = Collections.unmodifiableList(driverClasspath);
@@ -66,6 +69,7 @@ final class Config {
     String mainClass = null;
     String coverageMainClass = null;
     String driverMain = null;
+    String extensionsFile = null;
     List<String> jvmFlags = new ArrayList<>();
     List<ClasspathEntry> classpath = new ArrayList<>();
     List<String> driverClasspath = new ArrayList<>();
@@ -92,6 +96,9 @@ final class Config {
           break;
         case "driver_main":
           driverMain = value;
+          break;
+        case "extensions_file":
+          extensionsFile = value;
           break;
         case "jvm_flag":
           jvmFlags.add(value);
@@ -131,6 +138,7 @@ final class Config {
         mainClass,
         coverageMainClass,
         driverMain,
+        extensionsFile,
         jvmFlags,
         classpath,
         driverClasspath);

@@ -14,9 +14,10 @@
 """Bazel java_test rule"""
 
 load("//java/common:java_semantics.bzl", "semantics")
-load("//java/common/rules:java_binary.bzl", "BASE_TEST_ATTRIBUTES")
+load("//java/common/rules:java_binary.bzl", "BASE_TEST_ATTRIBUTES", "attr_java_deps", "attr_java_runtime_deps")
 load("//java/common/rules:rule_util.bzl", "merge_attrs")
 load("//java/common/rules/impl:java_binary_impl.bzl", "binary_provider_helper")
+load("//java/bazel/rules/test_runner:extensions.bzl", "scan_extensions_aspect")
 load(":bazel_java_binary.bzl", "BASE_BINARY_ATTRS", "bazel_base_binary_impl", "make_binary_rule")
 
 def _bazel_java_test_impl(ctx):
@@ -101,8 +102,15 @@ java_test(
                 default = "@rules_java//java/bazel/rules:java_test_runner_wrapper_template.txt",
                 allow_single_file = True,
             ),
+            "_extension_aggregator": attr.label(
+                default = "@rules_java//java/bazel/rules/test_runner:extension_aggregator",
+                executable = True,
+                cfg = "exec",
+            ),
         },
         override_attrs = {
+            "deps": attr_java_deps(aspects = [scan_extensions_aspect]),
+            "runtime_deps": attr_java_runtime_deps(aspects = [scan_extensions_aspect]),
             "use_testrunner": attr.bool(
                 default = True,
                 doc = semantics.DOCS.for_attribute("use_testrunner") + """

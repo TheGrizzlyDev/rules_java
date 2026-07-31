@@ -27,6 +27,46 @@ load(":rule_util.bzl", "merge_attrs")
 BootClassPathInfo = java_common.BootClassPathInfo
 _PLATFORMS_ROOT = semantics.PLATFORMS_ROOT
 
+def attr_java_deps(aspects = []):
+    """Returns the `deps` attribute definition for a java_binary-like rule.
+
+    Kept in one place so the attribute definition doesn't drift when rulesets
+    override it just to attach an aspect.
+    """
+    return attr.label_list(
+        allow_files = [".jar"],
+        allow_rules = semantics.ALLOWED_RULES_IN_DEPS + semantics.ALLOWED_RULES_IN_DEPS_WITH_WARNING,
+        providers = [
+            [CcInfo],
+            [JavaInfo],
+        ],
+        flags = ["SKIP_ANALYSIS_TIME_FILETYPE_CHECK"],
+        aspects = aspects,
+        doc = """
+The list of other libraries to be linked in to the target.
+See general comments about <code>deps</code> at
+<a href="common-definitions.html#typical-attributes">Typical attributes defined by
+most build rules</a>.
+        """,
+    )
+
+def attr_java_runtime_deps(aspects = []):
+    """Returns the `runtime_deps` attribute definition for a java_binary-like rule."""
+    return attr.label_list(
+        allow_files = [".jar"],
+        allow_rules = semantics.ALLOWED_RULES_IN_DEPS,
+        providers = [[CcInfo], [JavaInfo]],
+        flags = ["SKIP_ANALYSIS_TIME_FILETYPE_CHECK"],
+        aspects = aspects,
+        doc = """
+Libraries to make available to the final binary or test at runtime only.
+Like ordinary <code>deps</code>, these will appear on the runtime classpath, but unlike
+them, not on the compile-time classpath. Dependencies needed only at runtime should be
+listed here. Dependency-analysis tools should ignore targets that appear in both
+<code>runtime_deps</code> and <code>deps</code>.
+        """,
+    )
+
 BASIC_JAVA_BINARY_ATTRIBUTES = merge_attrs(
     BASIC_JAVA_LIBRARY_IMPLICIT_ATTRS,
     # buildifier: disable=attr-licenses
@@ -63,21 +103,7 @@ class on the runtime classpath or you specify the <code>runtime_deps</code> argu
 </p>
             """,
         ),
-        "deps": attr.label_list(
-            allow_files = [".jar"],
-            allow_rules = semantics.ALLOWED_RULES_IN_DEPS + semantics.ALLOWED_RULES_IN_DEPS_WITH_WARNING,
-            providers = [
-                [CcInfo],
-                [JavaInfo],
-            ],
-            flags = ["SKIP_ANALYSIS_TIME_FILETYPE_CHECK"],
-            doc = """
-The list of other libraries to be linked in to the target.
-See general comments about <code>deps</code> at
-<a href="common-definitions.html#typical-attributes">Typical attributes defined by
-most build rules</a>.
-            """,
-        ),
+        "deps": attr_java_deps(),
         "resources": attr.label_list(
             allow_files = True,
             flags = ["SKIP_CONSTRAINTS_OVERRIDE", "ORDER_INDEPENDENT"],
@@ -89,19 +115,7 @@ Resources may be source files or generated files.
 </p>
             """ + semantics.DOCS.for_attribute("resources"),
         ),
-        "runtime_deps": attr.label_list(
-            allow_files = [".jar"],
-            allow_rules = semantics.ALLOWED_RULES_IN_DEPS,
-            providers = [[CcInfo], [JavaInfo]],
-            flags = ["SKIP_ANALYSIS_TIME_FILETYPE_CHECK"],
-            doc = """
-Libraries to make available to the final binary or test at runtime only.
-Like ordinary <code>deps</code>, these will appear on the runtime classpath, but unlike
-them, not on the compile-time classpath. Dependencies needed only at runtime should be
-listed here. Dependency-analysis tools should ignore targets that appear in both
-<code>runtime_deps</code> and <code>deps</code>.
-            """,
-        ),
+        "runtime_deps": attr_java_runtime_deps(),
         "data": attr.label_list(
             allow_files = True,
             flags = ["SKIP_CONSTRAINTS_OVERRIDE"],
