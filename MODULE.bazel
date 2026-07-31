@@ -27,6 +27,7 @@ single_version_override(
 )
 
 register_toolchains("//toolchains:all")
+register_toolchains("//java/bazel/rules/test_runner:persistent_test_runner_toolchain")
 
 toolchains = use_extension("//java:extensions.bzl", "toolchains")
 

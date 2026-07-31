@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 load("//java:defs.bzl", "java_binary", "java_library")
+load("//java/bazel/rules:jvm_test_info.bzl", "jvm_persistent_test_runner_info")
 
 package(default_applicable_licenses = ["@rules_java//:license"])
 
@@ -32,5 +33,19 @@ java_binary(
 java_library(
     name = "jvm_driver",
     srcs = ["JvmDriver.java"],
+    visibility = ["//visibility:public"],
+)
+
+jvm_persistent_test_runner_info(
+    name = "jvm_persistent_test_runner_info",
+    additional_deps = [":jvm_driver"],
+    runner = ":persistent_test_runner",
+    visibility = ["//visibility:public"],
+)
+
+toolchain(
+    name = "persistent_test_runner_toolchain",
+    toolchain = ":jvm_persistent_test_runner_info",
+    toolchain_type = "//java/bazel/rules:jvm_test_toolchain_type",
     visibility = ["//visibility:public"],
 )

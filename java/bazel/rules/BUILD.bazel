@@ -72,3 +72,8 @@ exports_files(
     ["java_test_runner_wrapper_template.txt"],
     visibility = ["//visibility:public"],
 )
+
+toolchain_type(
+    name = "jvm_test_toolchain_type",
+    visibility = ["//visibility:public"],
+)

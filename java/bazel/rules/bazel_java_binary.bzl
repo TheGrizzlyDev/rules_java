@@ -28,6 +28,13 @@ load("//java/common/rules/impl:java_binary_impl.bzl", "basic_java_binary", "bina
 load("//java/common/rules/impl:java_helper.bzl", "helper")
 load("//java/private:java_info.bzl", "JavaInfo")
 
+_JVM_TEST_TOOLCHAIN_TYPE = "//java/bazel/rules:jvm_test_toolchain_type"
+
+def _resolve_jvm_test_toolchain(ctx, is_test_rule_class):
+    if not is_test_rule_class:
+        return None
+    return ctx.toolchains[_JVM_TEST_TOOLCHAIN_TYPE]
+
 def _bazel_java_binary_impl(ctx):
     return bazel_base_binary_impl(ctx, is_test_rule_class = False) + binary_provider_helper.executable_providers(ctx)
 
@@ -92,9 +99,11 @@ def bazel_base_binary_impl(ctx, is_test_rule_class):
 
     java_attrs = providers["InternalDeployJarInfo"].java_attrs
 
+    jvm_test_toolchain = _resolve_jvm_test_toolchain(ctx, is_test_rule_class)
+
     extra_runfiles = []
     if executable:
-        extra_runfiles = _create_stub(ctx, java_attrs, launcher_info.launcher, executable, jvm_flags, main_class, coverage_main_class)
+        extra_runfiles = _create_stub(ctx, java_attrs, launcher_info.launcher, executable, jvm_flags, main_class, coverage_main_class, jvm_test_toolchain)
 
     runfiles = default_info.runfiles
 
@@ -106,13 +115,10 @@ def bazel_base_binary_impl(ctx, is_test_rule_class):
     if test_support:
         runfiles = runfiles.merge(test_support[DefaultInfo].default_runfiles)
 
-    test_runner = getattr(ctx.attr, "_test_runner", None)
-    if test_runner:
-        runfiles = runfiles.merge(test_runner[DefaultInfo].default_runfiles)
-
-    jvm_driver = getattr(ctx.attr, "_jvm_driver", None)
-    if jvm_driver:
-        runfiles = runfiles.merge(ctx.runfiles(transitive_files = depset(transitive = [jvm_driver[JavaInfo].transitive_runtime_jars])))
+    if jvm_test_toolchain:
+        runfiles = runfiles.merge(jvm_test_toolchain.runner[DefaultInfo].default_runfiles)
+        for dep in jvm_test_toolchain.additional_deps:
+            runfiles = runfiles.merge(ctx.runfiles(transitive_files = depset(transitive = [dep[JavaInfo].transitive_runtime_jars])))
 
     if extra_runfiles:
         runfiles = runfiles.merge(ctx.runfiles(files = extra_runfiles))
@@ -223,7 +229,7 @@ def _find_launcher_maker(ctx):
         return ctx.toolchains[_LAUNCHER_MAKER_TOOLCHAIN_TYPE].binary
     return ctx.executable._windows_launcher_maker
 
-def _create_stub(ctx, java_attrs, launcher, executable, jvm_flags, main_class, coverage_main_class):
+def _create_stub(ctx, java_attrs, launcher, executable, jvm_flags, main_class, coverage_main_class, jvm_test_toolchain):
     java_runtime_toolchain = semantics.find_java_runtime_toolchain(ctx)
     java_executable = helper.get_java_executable(ctx, java_runtime_toolchain, launcher)
     workspace_name = ctx.workspace_name
@@ -240,8 +246,7 @@ def _create_stub(ctx, java_attrs, launcher, executable, jvm_flags, main_class, c
         ],
     )
 
-    test_runner = getattr(ctx.attr, "_test_runner", None)
-    test_runner_executable = ctx.executable._test_runner if test_runner else None
+    test_runner_executable = jvm_test_toolchain.runner[DefaultInfo].files_to_run.executable if jvm_test_toolchain else None
 
     if helper.is_target_platform_windows(ctx):
         jvm_flags_for_launcher = []
@@ -254,6 +259,7 @@ def _create_stub(ctx, java_attrs, launcher, executable, jvm_flags, main_class, c
             ctx,
             executable = executable,
             test_runner_executable = test_runner_executable,
+            additional_deps = jvm_test_toolchain.additional_deps,
             java_executable = java_executable,
             main_class = main_class,
             coverage_main_class = coverage_main_class,
@@ -311,6 +317,7 @@ def _create_test_runner_wrapper(
         ctx,
         executable,
         test_runner_executable,
+        additional_deps,
         java_executable,
         main_class,
         coverage_main_class,
@@ -338,9 +345,9 @@ def _create_test_runner_wrapper(
         ],
         allow_closure = True,
     )
-    driver_jars = ctx.attr._jvm_driver[JavaInfo].transitive_runtime_jars
+    additional_jars = depset(transitive = [dep[JavaInfo].transitive_runtime_jars for dep in additional_deps])
     config_args.add_all(
-        driver_jars,
+        additional_jars,
         map_each = lambda f: "driver_classpath_entry=" + paths.normalize(workspace_prefix_for_map + f.short_path),
         allow_closure = True,
     )
@@ -415,6 +422,8 @@ def make_binary_rule(implementation, *, doc, attrs, executable = False, test = F
             [semantics.JAVA_RUNTIME_TOOLCHAIN] if executable or test else []
         ) + (
             [_LAUNCHER_MAKER_TOOLCHAIN] if bazel_features.rules._has_launcher_maker_toolchain else []
+        ) + (
+            [config_common.toolchain_type("//java/bazel/rules:jvm_test_toolchain_type", mandatory = False)] if test else []
         ),
         # TODO(hvd): replace with filegroups?
         outputs = {
