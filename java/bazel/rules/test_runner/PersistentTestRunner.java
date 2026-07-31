@@ -72,6 +72,10 @@ public final class PersistentTestRunner {
     Runfiles runfiles = Runfiles.preload().unmapped();
 
     String javabin = resolveRunfile(runfiles, config.javabin);
+    String extensionsFilePath = null;
+    if (config.extensionsFile != null && !config.extensionsFile.isEmpty()) {
+      extensionsFilePath = resolveRunfile(runfiles, config.extensionsFile);
+    }
 
     List<String> classpath = new ArrayList<>();
     for (String entry : config.driverClasspath) {
@@ -105,6 +109,9 @@ public final class PersistentTestRunner {
     }
     command.add("-Dbazel.persistent.test_main=" + config.mainClass);
     command.add("-Dbazel.persistent.status_file=" + statusFile);
+    if (extensionsFilePath != null) {
+      command.add("-Dbazel.persistent.extensions_file=" + extensionsFilePath);
+    }
     command.addAll(config.jvmFlags);
     command.addAll(wrapperArgs.jvmFlagsCmdline);
     command.add("-classpath");

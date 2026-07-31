@@ -34,6 +34,7 @@ java_library(
     name = "jvm_driver",
     srcs = ["JvmDriver.java"],
     visibility = ["//visibility:public"],
+    deps = ["//java/bazel/rules/test_runner/extension"],
 )
 
 java_binary(

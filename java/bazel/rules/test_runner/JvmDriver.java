@@ -13,6 +13,10 @@
 // limitations under the License.
 package com.google.devtools.build.java.testrunner;
 
+import com.google.devtools.build.java.testrunner.extension.Extension;
+import com.google.devtools.build.java.testrunner.extension.JvmContext;
+import com.google.devtools.build.java.testrunner.extension.Store;
+import com.google.devtools.build.java.testrunner.extension.TestContext;
 import java.io.IOException;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -21,11 +25,19 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 
 public final class JvmDriver {
 
   private static final String TEST_MAIN_PROP = "bazel.persistent.test_main";
   private static final String STATUS_FILE_PROP = "bazel.persistent.status_file";
+  private static final String EXTENSIONS_FILE_PROP = "bazel.persistent.extensions_file";
 
   private JvmDriver() {}
 
@@ -36,6 +48,15 @@ public final class JvmDriver {
       throw new IllegalStateException(
           "JvmDriver requires -D" + TEST_MAIN_PROP + " and -D" + STATUS_FILE_PROP);
     }
+
+    List<Extension> extensions = loadExtensions(System.getProperty(EXTENSIONS_FILE_PROP));
+    Store store = new InMemoryStore();
+    JvmContext jvmCtx = () -> store;
+    TestContext testCtx = () -> store;
+
+    // TODO: onWorkerStart needs coordinator/runner IPC; skipped in single-shot mode.
+    invokeStart(extensions, ext -> ext.onJvmStart(jvmCtx));
+    invokeStart(extensions, ext -> ext.onTestStart(testCtx));
 
     int exitCode;
     try {
@@ -52,6 +73,10 @@ public final class JvmDriver {
       exitCode = 1;
     }
 
+    invokeShutdown(extensions, ext -> ext.onTestShutdown(testCtx));
+    invokeShutdown(extensions, ext -> ext.onJvmShutdown(jvmCtx));
+    // TODO: onWorkerShutdown needs coordinator/runner IPC; skipped in single-shot mode.
+
     writeStatus(Paths.get(statusFile), exitCode);
     System.out.flush();
     System.err.flush();
@@ -59,9 +84,71 @@ public final class JvmDriver {
     Thread.currentThread().join();
   }
 
+  private static List<Extension> loadExtensions(String extensionsFile) throws IOException {
+    if (extensionsFile == null || extensionsFile.isEmpty()) {
+      return Collections.emptyList();
+    }
+    Path p = Paths.get(extensionsFile);
+    if (!Files.exists(p)) {
+      return Collections.emptyList();
+    }
+    List<Extension> extensions = new ArrayList<>();
+    for (String line : Files.readAllLines(p, StandardCharsets.UTF_8)) {
+      String className = line.trim();
+      if (className.isEmpty()) {
+        continue;
+      }
+      try {
+        Class<?> cls = Class.forName(className);
+        Object instance = cls.getConstructor().newInstance();
+        if (!(instance instanceof Extension)) {
+          throw new IllegalStateException(className + " does not implement Extension");
+        }
+        extensions.add((Extension) instance);
+      } catch (ReflectiveOperationException e) {
+        throw new IllegalStateException("failed to load extension " + className, e);
+      }
+    }
+    // Ascending priority for start hooks; shutdown iteration will reverse.
+    extensions.sort(Comparator.comparingInt(Extension::priority));
+    return extensions;
+  }
+
+  private static void invokeStart(List<Extension> extensions, HookInvocation hook) {
+    for (Extension ext : extensions) {
+      hook.invoke(ext);
+    }
+  }
+
+  private static void invokeShutdown(List<Extension> extensions, HookInvocation hook) {
+    for (int i = extensions.size() - 1; i >= 0; i--) {
+      hook.invoke(extensions.get(i));
+    }
+  }
+
+  private interface HookInvocation {
+    void invoke(Extension ext);
+  }
+
   private static void writeStatus(Path path, int exitCode) throws IOException {
     Path tmp = path.resolveSibling(path.getFileName() + ".tmp");
     Files.write(tmp, Integer.toString(exitCode).getBytes(StandardCharsets.UTF_8));
     Files.move(tmp, path, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+  }
+
+  private static final class InMemoryStore implements Store {
+    // TODO: back this with an IPC channel to the coordinator so state survives
+    // across JVMs. For now it's JVM-local.
+    private final Map<String, String> map = new ConcurrentHashMap<>();
+
+    @Override
+    public Optional<String> get(String key) {
+      return Optional.ofNullable(map.get(key));
+    }
+
+    @Override
+    public void set(String key, String value) {
+      map.put(key, value);
+    }
   }
 }

@@ -13,6 +13,4 @@
 // limitations under the License.
 package com.google.devtools.build.java.testrunner.extension;
 
-public interface TestContext extends CommonContext {
-  void exitTest(int exitCode);
-}
+public interface TestContext extends CommonContext {}
