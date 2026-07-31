@@ -36,6 +36,20 @@ java_library(
     visibility = ["//visibility:public"],
 )
 
+java_binary(
+    name = "extension_scanner",
+    srcs = ["ExtensionScanner.java"],
+    main_class = "com.google.devtools.build.java.testrunner.ExtensionScanner",
+    visibility = ["//visibility:public"],
+)
+
+java_binary(
+    name = "extension_aggregator",
+    srcs = ["ExtensionAggregator.java"],
+    main_class = "com.google.devtools.build.java.testrunner.ExtensionAggregator",
+    visibility = ["//visibility:public"],
+)
+
 jvm_persistent_test_runner_info(
     name = "jvm_persistent_test_runner_info",
     additional_deps = [":jvm_driver"],
