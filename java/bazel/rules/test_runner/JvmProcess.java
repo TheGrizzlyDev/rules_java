@@ -37,12 +37,17 @@ final class JvmProcess {
   final List<ClasspathEntry> classpath;
 
   private final AtomicBoolean busy = new AtomicBoolean(true);
+  long lastUsedAt;
 
   JvmProcess(Process process, String javabin, List<String> jvmFlags, List<ClasspathEntry> classpath) {
     this.process = process;
     this.javabin = javabin;
     this.jvmFlags = Collections.unmodifiableList(jvmFlags);
     this.classpath = Collections.unmodifiableList(classpath);
+  }
+
+  boolean isBusy() {
+    return busy.get();
   }
 
   boolean tryClaim() {

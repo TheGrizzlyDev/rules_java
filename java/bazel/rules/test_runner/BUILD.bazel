@@ -19,6 +19,7 @@ java_binary(
     name = "persistent_test_runner",
     srcs = [
         "Config.java",
+        "JvmPool.java",
         "JvmProcess.java",
         "PersistentTestRunner.java",
         "WrapperArgs.java",
