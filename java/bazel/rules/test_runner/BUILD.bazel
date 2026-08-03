@@ -20,6 +20,7 @@ java_binary(
     name = "persistent_test_runner",
     srcs = [
         "Config.java",
+        "CoordinatorStore.java",
         "JvmPool.java",
         "JvmProcess.java",
         "PersistentTestRunner.java",
@@ -27,14 +28,20 @@ java_binary(
     ],
     main_class = "com.google.devtools.build.java.testrunner.PersistentTestRunner",
     visibility = ["//visibility:public"],
-    deps = ["//java/runfiles"],
+    deps = [
+        "//java/bazel/rules/test_runner/wire",
+        "//java/runfiles",
+    ],
 )
 
 java_library(
     name = "jvm_driver",
     srcs = ["JvmDriver.java"],
     visibility = ["//visibility:public"],
-    deps = ["//java/bazel/rules/test_runner/extension"],
+    deps = [
+        "//java/bazel/rules/test_runner/extension",
+        "//java/bazel/rules/test_runner/wire",
+    ],
 )
 
 java_binary(

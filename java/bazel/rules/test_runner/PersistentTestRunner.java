@@ -13,10 +13,18 @@
 // limitations under the License.
 package com.google.devtools.build.java.testrunner;
 
+import com.google.devtools.build.java.testrunner.wire.Message;
+import com.google.devtools.build.java.testrunner.wire.SessionReady;
+import com.google.devtools.build.java.testrunner.wire.SessionStart;
+import com.google.devtools.build.java.testrunner.wire.StoreGetRequest;
+import com.google.devtools.build.java.testrunner.wire.StoreGetResponse;
+import com.google.devtools.build.java.testrunner.wire.StoreSetAck;
+import com.google.devtools.build.java.testrunner.wire.StoreSetRequest;
+import com.google.devtools.build.java.testrunner.wire.TestFinished;
+import com.google.devtools.build.java.testrunner.wire.WireChannel;
 import com.google.devtools.build.runfiles.Runfiles;
 import java.io.File;
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -24,6 +32,9 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.jar.Attributes;
 import java.util.jar.JarOutputStream;
 import java.util.jar.Manifest;
@@ -35,6 +46,7 @@ public final class PersistentTestRunner {
   private static final int MAX_JVMS = 4;
 
   private final JvmPool pool = new JvmPool(MAX_JVMS);
+  private final CoordinatorStore store = new CoordinatorStore();
 
   private PersistentTestRunner() {}
 
@@ -91,8 +103,12 @@ public final class PersistentTestRunner {
     int limit = wrapperArgs.classpathLimit != null ? wrapperArgs.classpathLimit : classpathLimit();
     boolean useClasspathJar = classpathString.length() > limit;
 
-    Path statusFile = Files.createTempFile("persistent-test-runner-status-", "");
-    Files.delete(statusFile);
+    // TODO: add Windows support (needs named pipes instead of FIFOs).
+    Path ipcDir = Files.createTempDirectory("persistent-test-runner-ipc-");
+    Path c2j = ipcDir.resolve("c2j-" + UUID.randomUUID() + ".pipe");
+    Path j2c = ipcDir.resolve("j2c-" + UUID.randomUUID() + ".pipe");
+    mkfifo(c2j);
+    mkfifo(j2c);
 
     List<String> command = new ArrayList<>();
     command.add(javabin);
@@ -108,7 +124,6 @@ public final class PersistentTestRunner {
       command.add("-Djava.io.tmpdir=" + testTmpdir);
     }
     command.add("-Dbazel.persistent.test_main=" + config.mainClass);
-    command.add("-Dbazel.persistent.status_file=" + statusFile);
     if (extensionsFilePath != null) {
       command.add("-Dbazel.persistent.extensions_file=" + extensionsFilePath);
     }
@@ -152,6 +167,8 @@ public final class PersistentTestRunner {
 
     pool.reserveSlot();
     ProcessBuilder pb = new ProcessBuilder(command).inheritIO();
+    pb.environment().put("BAZEL_PERSISTENT_IPC_C2J", c2j.toString());
+    pb.environment().put("BAZEL_PERSISTENT_IPC_J2C", j2c.toString());
     pb.environment().put("JACOCO_IS_JAR_WRAPPED", useClasspathJar ? "1" : "0");
     pb.environment().put("CLASSPATH_JAR", useClasspathJar ? classpathJar.getFileName().toString() : "");
     if (config.coverageMainClass != null) {
@@ -168,10 +185,30 @@ public final class PersistentTestRunner {
     pool.register(tracker);
     logSpawnedJvm(tracker);
 
+    // Order matters: coordinator opens write side first (blocks until child opens the matching
+    // read side), then the read side (blocks until child opens the matching write side). Child
+    // does the mirror order. Explicit locals to avoid Java's arg-evaluation-order pitfall.
+    WireChannel channel;
+    try {
+      java.io.OutputStream coordWrite = Files.newOutputStream(c2j);
+      java.io.InputStream coordRead = Files.newInputStream(j2c);
+      channel = new WireChannel(coordRead, coordWrite);
+    } catch (IOException e) {
+      process.destroyForcibly();
+      throw e;
+    }
+
     int exitCode;
     try {
-      exitCode = awaitStatus(statusFile, process);
+      exitCode = runSession(channel, process);
     } finally {
+      try {
+        channel.close();
+      } catch (IOException ignored) {
+      }
+      Files.deleteIfExists(c2j);
+      Files.deleteIfExists(j2c);
+      Files.deleteIfExists(ipcDir);
       pool.release(tracker);
     }
 
@@ -181,17 +218,79 @@ public final class PersistentTestRunner {
     return exitCode;
   }
 
-  private static int awaitStatus(Path statusFile, Process process) throws IOException, InterruptedException {
-    while (true) {
-      if (Files.exists(statusFile)) {
-        String contents = new String(Files.readAllBytes(statusFile), StandardCharsets.UTF_8).trim();
-        Files.deleteIfExists(statusFile);
-        return Integer.parseInt(contents);
+  private int runSession(WireChannel channel, Process process)
+      throws IOException, InterruptedException {
+    CompletableFuture<Integer> finished = new CompletableFuture<>();
+    Thread reader =
+        new Thread(
+            () -> {
+              try {
+                while (true) {
+                  Message msg = channel.read();
+                  if (msg == null) {
+                    // Child closed the wire without sending TestFinished. Wait for the
+                    // process to exit so we can report its real exit code.
+                    try {
+                      process.waitFor();
+                    } catch (InterruptedException e) {
+                      Thread.currentThread().interrupt();
+                    }
+                    finished.complete(process.exitValue());
+                    return;
+                  }
+                  handle(channel, msg, finished);
+                  if (finished.isDone()) {
+                    return;
+                  }
+                }
+              } catch (IOException e) {
+                finished.completeExceptionally(e);
+              }
+            },
+            "persistent-test-runner-wire-reader");
+    reader.setDaemon(true);
+    reader.start();
+
+    channel.send(SessionStart.INSTANCE);
+    try {
+      return finished.get();
+    } catch (java.util.concurrent.ExecutionException e) {
+      Throwable cause = e.getCause();
+      if (cause instanceof IOException) {
+        throw (IOException) cause;
       }
-      if (!process.isAlive()) {
-        return process.exitValue();
-      }
-      Thread.sleep(50);
+      throw new IOException(cause);
+    }
+  }
+
+  private void handle(WireChannel channel, Message msg, CompletableFuture<Integer> finished)
+      throws IOException {
+    if (msg instanceof SessionReady) {
+      return;
+    }
+    if (msg instanceof StoreGetRequest) {
+      StoreGetRequest r = (StoreGetRequest) msg;
+      Optional<String> v = store.get(r.key());
+      channel.send(new StoreGetResponse(r.requestId(), v.isPresent(), v.orElse("")));
+      return;
+    }
+    if (msg instanceof StoreSetRequest) {
+      StoreSetRequest r = (StoreSetRequest) msg;
+      store.set(r.key(), r.value());
+      channel.send(new StoreSetAck(r.requestId()));
+      return;
+    }
+    if (msg instanceof TestFinished) {
+      finished.complete(((TestFinished) msg).exitCode());
+      return;
+    }
+    throw new IOException("unexpected message: " + msg.getClass().getSimpleName());
+  }
+
+  private static void mkfifo(Path p) throws IOException, InterruptedException {
+    Process mkfifo = new ProcessBuilder("mkfifo", p.toString()).inheritIO().start();
+    if (mkfifo.waitFor() != 0) {
+      throw new IOException("mkfifo failed for " + p);
     }
   }
 

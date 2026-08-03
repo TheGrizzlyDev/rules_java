@@ -17,6 +17,15 @@ import com.google.devtools.build.java.testrunner.extension.Extension;
 import com.google.devtools.build.java.testrunner.extension.JvmContext;
 import com.google.devtools.build.java.testrunner.extension.Store;
 import com.google.devtools.build.java.testrunner.extension.TestContext;
+import com.google.devtools.build.java.testrunner.wire.Message;
+import com.google.devtools.build.java.testrunner.wire.SessionReady;
+import com.google.devtools.build.java.testrunner.wire.SessionStart;
+import com.google.devtools.build.java.testrunner.wire.StoreGetRequest;
+import com.google.devtools.build.java.testrunner.wire.StoreGetResponse;
+import com.google.devtools.build.java.testrunner.wire.StoreSetAck;
+import com.google.devtools.build.java.testrunner.wire.StoreSetRequest;
+import com.google.devtools.build.java.testrunner.wire.TestFinished;
+import com.google.devtools.build.java.testrunner.wire.WireChannel;
 import java.io.IOException;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -24,37 +33,80 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public final class JvmDriver {
 
   private static final String TEST_MAIN_PROP = "bazel.persistent.test_main";
-  private static final String STATUS_FILE_PROP = "bazel.persistent.status_file";
   private static final String EXTENSIONS_FILE_PROP = "bazel.persistent.extensions_file";
+  private static final String IPC_C2J_ENV = "BAZEL_PERSISTENT_IPC_C2J";
+  private static final String IPC_J2C_ENV = "BAZEL_PERSISTENT_IPC_J2C";
 
   private JvmDriver() {}
 
   public static void main(String[] args) throws Exception {
     String testMain = System.getProperty(TEST_MAIN_PROP);
-    String statusFile = System.getProperty(STATUS_FILE_PROP);
-    if (testMain == null || statusFile == null) {
+    String c2jPath = System.getenv(IPC_C2J_ENV);
+    String j2cPath = System.getenv(IPC_J2C_ENV);
+    if (testMain == null || c2jPath == null || j2cPath == null) {
       throw new IllegalStateException(
-          "JvmDriver requires -D" + TEST_MAIN_PROP + " and -D" + STATUS_FILE_PROP);
+          "JvmDriver requires -D"
+              + TEST_MAIN_PROP
+              + " and env "
+              + IPC_C2J_ENV
+              + "/"
+              + IPC_J2C_ENV);
     }
 
+    // Order matters: open read side first (blocks until coordinator opens the matching write
+    // side), then the write side (blocks until coordinator opens the matching read side).
+    // Mirror of the coordinator's ordering. Explicit locals to avoid Java's arg-evaluation-
+    // order pitfall.
+    java.io.InputStream childRead = Files.newInputStream(Paths.get(c2jPath));
+    java.io.OutputStream childWrite = Files.newOutputStream(Paths.get(j2cPath));
+    WireChannel channel = new WireChannel(childRead, childWrite);
+
+    Message hello = channel.read();
+    if (!(hello instanceof SessionStart)) {
+      throw new IOException("expected SessionStart, got " + hello);
+    }
+    channel.send(SessionReady.INSTANCE);
+
+    WireBackedStore store = new WireBackedStore(channel);
+    Thread reader =
+        new Thread(
+            () -> {
+              try {
+                while (true) {
+                  Message msg = channel.read();
+                  if (msg == null) {
+                    return;
+                  }
+                  store.dispatch(msg);
+                }
+              } catch (IOException e) {
+                // Coordinator closed the wire or sent garbage. Log to stderr; blocking store
+                // calls will surface an error via their pending futures.
+                e.printStackTrace();
+              }
+            },
+            "jvm-driver-wire-reader");
+    reader.setDaemon(true);
+    reader.start();
+
     List<Extension> extensions = loadExtensions(System.getProperty(EXTENSIONS_FILE_PROP));
-    Store store = new InMemoryStore();
     JvmContext jvmCtx = () -> store;
     TestContext testCtx = () -> store;
 
-    // TODO: onWorkerStart needs coordinator/runner IPC; skipped in single-shot mode.
+    // TODO: onWorkerStart needs a coordinator-side extension host; skipped for now.
     invokeStart(extensions, ext -> ext.onJvmStart(jvmCtx));
     invokeStart(extensions, ext -> ext.onTestStart(testCtx));
 
@@ -64,7 +116,8 @@ public final class JvmDriver {
       main.invoke(null, (Object) args);
       exitCode = 0;
     } catch (InvocationTargetException e) {
-      // TODO: intercept System.exit(N) so the test's exit code propagates instead of always 1.
+      // If the test called System.exit, control never returns here — the JVM dies and the
+      // coordinator sees EOF on the wire, then reads the process's actual exit code.
       Throwable cause = e.getCause();
       (cause != null ? cause : e).printStackTrace();
       exitCode = 1;
@@ -75,9 +128,9 @@ public final class JvmDriver {
 
     invokeShutdown(extensions, ext -> ext.onTestShutdown(testCtx));
     invokeShutdown(extensions, ext -> ext.onJvmShutdown(jvmCtx));
-    // TODO: onWorkerShutdown needs coordinator/runner IPC; skipped in single-shot mode.
+    // TODO: onWorkerShutdown needs a coordinator-side extension host; skipped for now.
 
-    writeStatus(Paths.get(statusFile), exitCode);
+    channel.send(new TestFinished(exitCode));
     System.out.flush();
     System.err.flush();
 
@@ -130,25 +183,60 @@ public final class JvmDriver {
     void invoke(Extension ext);
   }
 
-  private static void writeStatus(Path path, int exitCode) throws IOException {
-    Path tmp = path.resolveSibling(path.getFileName() + ".tmp");
-    Files.write(tmp, Integer.toString(exitCode).getBytes(StandardCharsets.UTF_8));
-    Files.move(tmp, path, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-  }
+  private static final class WireBackedStore implements Store {
+    private final WireChannel channel;
+    private final AtomicInteger nextRequestId = new AtomicInteger(1);
+    private final ConcurrentMap<Integer, CompletableFuture<Optional<String>>> pendingGets =
+        new ConcurrentHashMap<>();
+    private final ConcurrentMap<Integer, CompletableFuture<Void>> pendingSets =
+        new ConcurrentHashMap<>();
 
-  private static final class InMemoryStore implements Store {
-    // TODO: back this with an IPC channel to the coordinator so state survives
-    // across JVMs. For now it's JVM-local.
-    private final Map<String, String> map = new ConcurrentHashMap<>();
+    WireBackedStore(WireChannel channel) {
+      this.channel = channel;
+    }
 
     @Override
     public Optional<String> get(String key) {
-      return Optional.ofNullable(map.get(key));
+      int id = nextRequestId.getAndIncrement();
+      CompletableFuture<Optional<String>> f = new CompletableFuture<>();
+      pendingGets.put(id, f);
+      try {
+        channel.send(new StoreGetRequest(id, key));
+        return f.join();
+      } catch (IOException e) {
+        pendingGets.remove(id);
+        throw new RuntimeException("Store.get failed", e);
+      }
     }
 
     @Override
     public void set(String key, String value) {
-      map.put(key, value);
+      int id = nextRequestId.getAndIncrement();
+      CompletableFuture<Void> f = new CompletableFuture<>();
+      pendingSets.put(id, f);
+      try {
+        channel.send(new StoreSetRequest(id, key, value));
+        f.join();
+      } catch (IOException e) {
+        pendingSets.remove(id);
+        throw new RuntimeException("Store.set failed", e);
+      }
+    }
+
+    void dispatch(Message msg) {
+      if (msg instanceof StoreGetResponse) {
+        StoreGetResponse r = (StoreGetResponse) msg;
+        CompletableFuture<Optional<String>> f = pendingGets.remove(r.requestId());
+        if (f != null) {
+          f.complete(r.present() ? Optional.of(r.value()) : Optional.empty());
+        }
+      } else if (msg instanceof StoreSetAck) {
+        StoreSetAck r = (StoreSetAck) msg;
+        CompletableFuture<Void> f = pendingSets.remove(r.requestId());
+        if (f != null) {
+          f.complete(null);
+        }
+      }
     }
   }
 }
