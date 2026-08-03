@@ -28,6 +28,8 @@ java_library(
         "StoreSetRequest.java",
         "TestFinished.java",
         "WireChannel.java",
+        "WorkerShutdown.java",
+        "WorkerStart.java",
     ],
     visibility = ["//visibility:public"],
 )

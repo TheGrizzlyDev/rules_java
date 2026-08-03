@@ -22,6 +22,8 @@ import com.google.devtools.build.java.testrunner.wire.StoreSetAck;
 import com.google.devtools.build.java.testrunner.wire.StoreSetRequest;
 import com.google.devtools.build.java.testrunner.wire.TestFinished;
 import com.google.devtools.build.java.testrunner.wire.WireChannel;
+import com.google.devtools.build.java.testrunner.wire.WorkerShutdown;
+import com.google.devtools.build.java.testrunner.wire.WorkerStart;
 import com.google.devtools.build.runfiles.Runfiles;
 import java.io.File;
 import java.io.IOException;
@@ -266,6 +268,10 @@ public final class PersistentTestRunner {
   private void handle(WireChannel channel, Message msg, CompletableFuture<Integer> finished)
       throws IOException {
     if (msg instanceof SessionReady) {
+      // TODO: this coordinator only serves one child in its lifetime. When it becomes
+      // long-lived, WorkerStart should be sent once per coordinator process, not once per
+      // child JVM.
+      channel.send(WorkerStart.INSTANCE);
       return;
     }
     if (msg instanceof StoreGetRequest) {
@@ -281,6 +287,13 @@ public final class PersistentTestRunner {
       return;
     }
     if (msg instanceof TestFinished) {
+      // TODO: when the coordinator is long-lived, WorkerShutdown belongs at coordinator
+      // shutdown, not after a single TestFinished. For now these coincide.
+      try {
+        channel.send(WorkerShutdown.INSTANCE);
+      } catch (IOException ignored) {
+        // Child may have already died; we'll fall back to EOF handling.
+      }
       finished.complete(((TestFinished) msg).exitCode());
       return;
     }

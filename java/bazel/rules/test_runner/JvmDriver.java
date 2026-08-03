@@ -15,6 +15,7 @@ package com.google.devtools.build.java.testrunner;
 
 import com.google.devtools.build.java.testrunner.extension.Extension;
 import com.google.devtools.build.java.testrunner.extension.JvmContext;
+import com.google.devtools.build.java.testrunner.extension.RunnerContext;
 import com.google.devtools.build.java.testrunner.extension.Store;
 import com.google.devtools.build.java.testrunner.extension.TestContext;
 import com.google.devtools.build.java.testrunner.wire.Message;
@@ -26,6 +27,8 @@ import com.google.devtools.build.java.testrunner.wire.StoreSetAck;
 import com.google.devtools.build.java.testrunner.wire.StoreSetRequest;
 import com.google.devtools.build.java.testrunner.wire.TestFinished;
 import com.google.devtools.build.java.testrunner.wire.WireChannel;
+import com.google.devtools.build.java.testrunner.wire.WorkerShutdown;
+import com.google.devtools.build.java.testrunner.wire.WorkerStart;
 import java.io.IOException;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -41,6 +44,7 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public final class JvmDriver {
@@ -80,7 +84,18 @@ public final class JvmDriver {
     }
     channel.send(SessionReady.INSTANCE);
 
+    Message workerStart = channel.read();
+    if (!(workerStart instanceof WorkerStart)) {
+      throw new IOException("expected WorkerStart, got " + workerStart);
+    }
+
+    List<Extension> extensions = loadExtensions(System.getProperty(EXTENSIONS_FILE_PROP));
     WireBackedStore store = new WireBackedStore(channel);
+    RunnerContext runnerCtx = () -> store;
+    JvmContext jvmCtx = () -> store;
+    TestContext testCtx = () -> store;
+
+    CompletableFuture<Void> workerShutdownReceived = new CompletableFuture<>();
     Thread reader =
         new Thread(
             () -> {
@@ -88,6 +103,11 @@ public final class JvmDriver {
                 while (true) {
                   Message msg = channel.read();
                   if (msg == null) {
+                    workerShutdownReceived.complete(null);
+                    return;
+                  }
+                  if (msg instanceof WorkerShutdown) {
+                    workerShutdownReceived.complete(null);
                     return;
                   }
                   store.dispatch(msg);
@@ -96,17 +116,25 @@ public final class JvmDriver {
                 // Coordinator closed the wire or sent garbage. Log to stderr; blocking store
                 // calls will surface an error via their pending futures.
                 e.printStackTrace();
+                workerShutdownReceived.complete(null);
               }
             },
             "jvm-driver-wire-reader");
     reader.setDaemon(true);
     reader.start();
 
-    List<Extension> extensions = loadExtensions(System.getProperty(EXTENSIONS_FILE_PROP));
-    JvmContext jvmCtx = () -> store;
-    TestContext testCtx = () -> store;
+    AtomicBoolean shutdownDone = new AtomicBoolean(false);
+    Runnable runShutdownHooks =
+        () -> {
+          if (shutdownDone.compareAndSet(false, true)) {
+            invokeShutdown(extensions, ext -> ext.onTestShutdown(testCtx));
+            invokeShutdown(extensions, ext -> ext.onJvmShutdown(jvmCtx));
+            invokeShutdown(extensions, ext -> ext.onWorkerShutdown(runnerCtx));
+          }
+        };
+    Runtime.getRuntime().addShutdownHook(new Thread(runShutdownHooks, "jvm-driver-shutdown"));
 
-    // TODO: onWorkerStart needs a coordinator-side extension host; skipped for now.
+    invokeStart(extensions, ext -> ext.onWorkerStart(runnerCtx));
     invokeStart(extensions, ext -> ext.onJvmStart(jvmCtx));
     invokeStart(extensions, ext -> ext.onTestStart(testCtx));
 
@@ -116,8 +144,9 @@ public final class JvmDriver {
       main.invoke(null, (Object) args);
       exitCode = 0;
     } catch (InvocationTargetException e) {
-      // If the test called System.exit, control never returns here — the JVM dies and the
-      // coordinator sees EOF on the wire, then reads the process's actual exit code.
+      // If the test called System.exit, control never returns here — the shutdown hook fires
+      // the child-side shutdown extension hooks; the coordinator sees EOF on the wire and
+      // reads the process's actual exit code.
       Throwable cause = e.getCause();
       (cause != null ? cause : e).printStackTrace();
       exitCode = 1;
@@ -126,15 +155,13 @@ public final class JvmDriver {
       exitCode = 1;
     }
 
-    invokeShutdown(extensions, ext -> ext.onTestShutdown(testCtx));
-    invokeShutdown(extensions, ext -> ext.onJvmShutdown(jvmCtx));
-    // TODO: onWorkerShutdown needs a coordinator-side extension host; skipped for now.
-
     channel.send(new TestFinished(exitCode));
     System.out.flush();
     System.err.flush();
 
-    Thread.currentThread().join();
+    // Wait for the coordinator's WorkerShutdown before firing the shutdown hooks.
+    workerShutdownReceived.join();
+    runShutdownHooks.run();
   }
 
   private static List<Extension> loadExtensions(String extensionsFile) throws IOException {

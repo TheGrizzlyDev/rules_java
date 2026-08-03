@@ -38,6 +38,8 @@ public final class Codec {
     SESSION_START(1),
     STORE_GET_RESPONSE(2),
     STORE_SET_ACK(3),
+    WORKER_START(4),
+    WORKER_SHUTDOWN(5),
     // Child → coordinator.
     SESSION_READY(100),
     STORE_GET_REQUEST(101),
@@ -73,6 +75,10 @@ public final class Codec {
       writeFramed(out, Tag.SESSION_START, p -> {});
     } else if (msg instanceof SessionReady) {
       writeFramed(out, Tag.SESSION_READY, p -> {});
+    } else if (msg instanceof WorkerStart) {
+      writeFramed(out, Tag.WORKER_START, p -> {});
+    } else if (msg instanceof WorkerShutdown) {
+      writeFramed(out, Tag.WORKER_SHUTDOWN, p -> {});
     } else if (msg instanceof StoreGetRequest) {
       StoreGetRequest r = (StoreGetRequest) msg;
       writeFramed(out, Tag.STORE_GET_REQUEST, p -> {
@@ -124,6 +130,10 @@ public final class Codec {
         return SessionStart.INSTANCE;
       case SESSION_READY:
         return SessionReady.INSTANCE;
+      case WORKER_START:
+        return WorkerStart.INSTANCE;
+      case WORKER_SHUTDOWN:
+        return WorkerShutdown.INSTANCE;
       case STORE_GET_REQUEST:
         return new StoreGetRequest(readVarintInt(p), readString(p));
       case STORE_GET_RESPONSE:
