@@ -13,6 +13,7 @@
 // limitations under the License.
 package com.google.devtools.build.java.testrunner;
 
+import com.google.devtools.build.java.testrunner.persistent_worker.PersistentWorker;
 import com.google.devtools.build.java.testrunner.wire.Message;
 import com.google.devtools.build.java.testrunner.wire.SessionReady;
 import com.google.devtools.build.java.testrunner.wire.SessionStart;
@@ -27,6 +28,8 @@ import com.google.devtools.build.java.testrunner.wire.WorkerStart;
 import com.google.devtools.build.runfiles.Runfiles;
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.PrintStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -53,6 +56,10 @@ public final class PersistentTestRunner {
   private PersistentTestRunner() {}
 
   public static void main(String[] args) throws Exception {
+    PersistentWorker.run(args, new PersistentTestRunner()::handleRequest);
+  }
+
+  int handleRequest(List<String> args, PrintStream stdout, PrintStream stderr) throws Exception {
     Config config = null;
     List<String> forwarded = new ArrayList<>();
     boolean afterSeparator = false;
@@ -70,13 +77,14 @@ public final class PersistentTestRunner {
     if (config == null) {
       throw new IllegalStateException("--config=<path> is required");
     }
-    System.exit(new PersistentTestRunner().run(config, forwarded));
+    return run(config, forwarded, stdout, stderr);
   }
 
-  int run(Config config, List<String> testArgs) throws Exception {
+  int run(Config config, List<String> testArgs, PrintStream stdout, PrintStream stderr)
+      throws Exception {
     WrapperArgs wrapperArgs = WrapperArgs.parse(testArgs);
     if (wrapperArgs.printJavabin || "--print_javabin".equals(config.mainClass)) {
-      System.out.print(config.javabin);
+      stdout.print(config.javabin);
       return 0;
     }
     if (config.driverMain == null) {
@@ -159,7 +167,7 @@ public final class PersistentTestRunner {
     if (reusable != null) {
       // TODO: dispatch this test into the reusable JVM instead of spawning a fresh one.
       // Requires an IPC channel to the driver process. For now, log, release it, and fall through.
-      System.err.println(
+      stderr.println(
           "[persistent-test-runner] would reuse an idle JVM with matching classpath (dispatch not yet implemented)");
       pool.release(reusable);
     }
@@ -168,7 +176,8 @@ public final class PersistentTestRunner {
     mergedJvmFlags.addAll(wrapperArgs.jvmFlagsCmdline);
 
     pool.reserveSlot();
-    ProcessBuilder pb = new ProcessBuilder(command).inheritIO();
+    ProcessBuilder pb = new ProcessBuilder(command).redirectErrorStream(false);
+    pb.redirectInput(ProcessBuilder.Redirect.INHERIT);
     pb.environment().put("BAZEL_PERSISTENT_IPC_C2J", c2j.toString());
     pb.environment().put("BAZEL_PERSISTENT_IPC_J2C", j2c.toString());
     pb.environment().put("JACOCO_IS_JAR_WRAPPED", useClasspathJar ? "1" : "0");
@@ -183,9 +192,11 @@ public final class PersistentTestRunner {
     ensureUtf8Locale(pb);
 
     Process process = pb.start();
+    Thread stdoutDrain = drain(process.getInputStream(), stdout, "child-stdout-drain");
+    Thread stderrDrain = drain(process.getErrorStream(), stderr, "child-stderr-drain");
     JvmProcess tracker = new JvmProcess(process, javabin, mergedJvmFlags, tracked);
     pool.register(tracker);
-    logSpawnedJvm(tracker);
+    logSpawnedJvm(tracker, stderr);
 
     // Order matters: coordinator opens write side first (blocks until child opens the matching
     // read side), then the read side (blocks until child opens the matching write side). Child
@@ -207,6 +218,13 @@ public final class PersistentTestRunner {
       try {
         channel.close();
       } catch (IOException ignored) {
+      }
+      // Wait for drains to finish so any last stdout/stderr bytes make it into the response.
+      try {
+        stdoutDrain.join();
+        stderrDrain.join();
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
       }
       Files.deleteIfExists(c2j);
       Files.deleteIfExists(j2c);
@@ -307,7 +325,7 @@ public final class PersistentTestRunner {
     }
   }
 
-  private void logSpawnedJvm(JvmProcess p) {
+  private void logSpawnedJvm(JvmProcess p, PrintStream stderr) {
     StringBuilder sb = new StringBuilder();
     sb.append("[persistent-test-runner] spawned JVM\n");
     sb.append("  javabin: ").append(p.javabin).append('\n');
@@ -320,7 +338,29 @@ public final class PersistentTestRunner {
       sb.append("    ").append(entry.sha256).append("  ").append(entry.label);
       sb.append("  (").append(entry.path).append(")\n");
     }
-    System.err.print(sb);
+    stderr.print(sb);
+  }
+
+  private static Thread drain(InputStream in, PrintStream out, String name) {
+    Thread t =
+        new Thread(
+            () -> {
+              byte[] buf = new byte[4096];
+              try {
+                int n;
+                while ((n = in.read(buf)) != -1) {
+                  synchronized (out) {
+                    out.write(buf, 0, n);
+                    out.flush();
+                  }
+                }
+              } catch (IOException ignored) {
+              }
+            },
+            name);
+    t.setDaemon(true);
+    t.start();
+    return t;
   }
 
   private static String sha256(String path) {

@@ -29,6 +29,7 @@ java_binary(
     main_class = "com.google.devtools.build.java.testrunner.PersistentTestRunner",
     visibility = ["//visibility:public"],
     deps = [
+        "//java/bazel/rules/test_runner/persistent_worker:persistent_worker_lib",
         "//java/bazel/rules/test_runner/wire",
         "//java/runfiles",
     ],
