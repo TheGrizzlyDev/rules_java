@@ -25,6 +25,7 @@ import com.google.devtools.build.java.testrunner.wire.StoreGetRequest;
 import com.google.devtools.build.java.testrunner.wire.StoreGetResponse;
 import com.google.devtools.build.java.testrunner.wire.StoreSetAck;
 import com.google.devtools.build.java.testrunner.wire.StoreSetRequest;
+import com.google.devtools.build.java.testrunner.wire.StoreValue;
 import com.google.devtools.build.java.testrunner.wire.TestFinished;
 import com.google.devtools.build.java.testrunner.wire.WireChannel;
 import com.google.devtools.build.java.testrunner.wire.WorkerShutdown;
@@ -213,7 +214,7 @@ public final class JvmDriver {
   private static final class WireBackedStore implements Store {
     private final WireChannel channel;
     private final AtomicInteger nextRequestId = new AtomicInteger(1);
-    private final ConcurrentMap<Integer, CompletableFuture<Optional<String>>> pendingGets =
+    private final ConcurrentMap<Integer, CompletableFuture<Optional<StoreValue>>> pendingGets =
         new ConcurrentHashMap<>();
     private final ConcurrentMap<Integer, CompletableFuture<Void>> pendingSets =
         new ConcurrentHashMap<>();
@@ -223,9 +224,61 @@ public final class JvmDriver {
     }
 
     @Override
-    public Optional<String> get(String key) {
+    public Optional<String> getString(String key) {
+      return typedGet(key, StoreValue.Kind.STRING).map(StoreValue::stringValue);
+    }
+
+    @Override
+    public Optional<Boolean> getBoolean(String key) {
+      return typedGet(key, StoreValue.Kind.BOOLEAN).map(StoreValue::boolValue);
+    }
+
+    @Override
+    public Optional<Long> getLong(String key) {
+      return typedGet(key, StoreValue.Kind.LONG).map(StoreValue::longValue);
+    }
+
+    @Override
+    public Optional<Double> getDouble(String key) {
+      return typedGet(key, StoreValue.Kind.DOUBLE).map(StoreValue::doubleValue);
+    }
+
+    @Override
+    public void set(String key, String value) {
+      typedSet(key, StoreValue.ofString(value));
+    }
+
+    @Override
+    public void set(String key, boolean value) {
+      typedSet(key, StoreValue.ofBoolean(value));
+    }
+
+    @Override
+    public void set(String key, long value) {
+      typedSet(key, StoreValue.ofLong(value));
+    }
+
+    @Override
+    public void set(String key, double value) {
+      typedSet(key, StoreValue.ofDouble(value));
+    }
+
+    private Optional<StoreValue> typedGet(String key, StoreValue.Kind expected) {
+      Optional<StoreValue> raw = rawGet(key);
+      if (!raw.isPresent()) {
+        return raw;
+      }
+      StoreValue.Kind actual = raw.get().kind();
+      if (actual != expected) {
+        throw new IllegalStateException(
+            "Store key '" + key + "' has kind " + actual + ", expected " + expected);
+      }
+      return raw;
+    }
+
+    private Optional<StoreValue> rawGet(String key) {
       int id = nextRequestId.getAndIncrement();
-      CompletableFuture<Optional<String>> f = new CompletableFuture<>();
+      CompletableFuture<Optional<StoreValue>> f = new CompletableFuture<>();
       pendingGets.put(id, f);
       try {
         channel.send(new StoreGetRequest(id, key));
@@ -236,8 +289,7 @@ public final class JvmDriver {
       }
     }
 
-    @Override
-    public void set(String key, String value) {
+    private void typedSet(String key, StoreValue value) {
       int id = nextRequestId.getAndIncrement();
       CompletableFuture<Void> f = new CompletableFuture<>();
       pendingSets.put(id, f);
@@ -253,7 +305,7 @@ public final class JvmDriver {
     void dispatch(Message msg) {
       if (msg instanceof StoreGetResponse) {
         StoreGetResponse r = (StoreGetResponse) msg;
-        CompletableFuture<Optional<String>> f = pendingGets.remove(r.requestId());
+        CompletableFuture<Optional<StoreValue>> f = pendingGets.remove(r.requestId());
         if (f != null) {
           f.complete(r.present() ? Optional.of(r.value()) : Optional.empty());
         }

@@ -21,6 +21,7 @@ import com.google.devtools.build.java.testrunner.wire.StoreGetRequest;
 import com.google.devtools.build.java.testrunner.wire.StoreGetResponse;
 import com.google.devtools.build.java.testrunner.wire.StoreSetAck;
 import com.google.devtools.build.java.testrunner.wire.StoreSetRequest;
+import com.google.devtools.build.java.testrunner.wire.StoreValue;
 import com.google.devtools.build.java.testrunner.wire.TestFinished;
 import com.google.devtools.build.java.testrunner.wire.WireChannel;
 import com.google.devtools.build.java.testrunner.wire.WorkerShutdown;
@@ -294,8 +295,8 @@ public final class PersistentTestRunner {
     }
     if (msg instanceof StoreGetRequest) {
       StoreGetRequest r = (StoreGetRequest) msg;
-      Optional<String> v = store.get(r.key());
-      channel.send(new StoreGetResponse(r.requestId(), v.isPresent(), v.orElse("")));
+      Optional<StoreValue> v = store.get(r.key());
+      channel.send(new StoreGetResponse(r.requestId(), v.isPresent(), v.orElse(null)));
       return;
     }
     if (msg instanceof StoreSetRequest) {

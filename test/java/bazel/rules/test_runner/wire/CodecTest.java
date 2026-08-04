@@ -46,27 +46,63 @@ public final class CodecTest {
   }
 
   @Test
-  public void storeGetResponse_present_roundTrip() throws IOException {
-    StoreGetResponse decoded = (StoreGetResponse) roundTrip(new StoreGetResponse(7, true, "v"));
+  public void storeGetResponse_presentString_roundTrip() throws IOException {
+    StoreGetResponse decoded =
+        (StoreGetResponse) roundTrip(new StoreGetResponse(7, true, StoreValue.ofString("v")));
     assertThat(decoded.requestId()).isEqualTo(7);
     assertThat(decoded.present()).isTrue();
-    assertThat(decoded.value()).isEqualTo("v");
+    assertThat(decoded.value().kind()).isEqualTo(StoreValue.Kind.STRING);
+    assertThat(decoded.value().stringValue()).isEqualTo("v");
+  }
+
+  @Test
+  public void storeGetResponse_presentBoolean_roundTrip() throws IOException {
+    StoreGetResponse decoded =
+        (StoreGetResponse) roundTrip(new StoreGetResponse(1, true, StoreValue.ofBoolean(true)));
+    assertThat(decoded.value().kind()).isEqualTo(StoreValue.Kind.BOOLEAN);
+    assertThat(decoded.value().boolValue()).isTrue();
+  }
+
+  @Test
+  public void storeGetResponse_presentLong_roundTrip() throws IOException {
+    StoreGetResponse decoded =
+        (StoreGetResponse)
+            roundTrip(new StoreGetResponse(1, true, StoreValue.ofLong(Long.MIN_VALUE)));
+    assertThat(decoded.value().kind()).isEqualTo(StoreValue.Kind.LONG);
+    assertThat(decoded.value().longValue()).isEqualTo(Long.MIN_VALUE);
+  }
+
+  @Test
+  public void storeGetResponse_presentDouble_roundTrip() throws IOException {
+    StoreGetResponse decoded =
+        (StoreGetResponse) roundTrip(new StoreGetResponse(1, true, StoreValue.ofDouble(-1.5)));
+    assertThat(decoded.value().kind()).isEqualTo(StoreValue.Kind.DOUBLE);
+    assertThat(decoded.value().doubleValue()).isEqualTo(-1.5);
   }
 
   @Test
   public void storeGetResponse_absent_roundTrip() throws IOException {
-    StoreGetResponse decoded = (StoreGetResponse) roundTrip(new StoreGetResponse(8, false, ""));
+    StoreGetResponse decoded = (StoreGetResponse) roundTrip(new StoreGetResponse(8, false, null));
     assertThat(decoded.requestId()).isEqualTo(8);
     assertThat(decoded.present()).isFalse();
-    assertThat(decoded.value()).isEmpty();
+    assertThat(decoded.value()).isNull();
   }
 
   @Test
-  public void storeSetRequest_roundTrip() throws IOException {
-    StoreSetRequest decoded = (StoreSetRequest) roundTrip(new StoreSetRequest(1, "k", "hello"));
+  public void storeSetRequest_string_roundTrip() throws IOException {
+    StoreSetRequest decoded =
+        (StoreSetRequest) roundTrip(new StoreSetRequest(1, "k", StoreValue.ofString("hello")));
     assertThat(decoded.requestId()).isEqualTo(1);
     assertThat(decoded.key()).isEqualTo("k");
-    assertThat(decoded.value()).isEqualTo("hello");
+    assertThat(decoded.value().kind()).isEqualTo(StoreValue.Kind.STRING);
+    assertThat(decoded.value().stringValue()).isEqualTo("hello");
+  }
+
+  @Test
+  public void storeSetRequest_long_roundTrip() throws IOException {
+    StoreSetRequest decoded =
+        (StoreSetRequest) roundTrip(new StoreSetRequest(1, "k", StoreValue.ofLong(42L)));
+    assertThat(decoded.value().longValue()).isEqualTo(42L);
   }
 
   @Test
@@ -89,18 +125,20 @@ public final class CodecTest {
 
   @Test
   public void unicodeStrings_roundTrip() throws IOException {
-    StoreSetRequest original = new StoreSetRequest(1, "key/日本語", "value/λ/🙂");
+    StoreSetRequest original =
+        new StoreSetRequest(1, "key/日本語", StoreValue.ofString("value/λ/🙂"));
     StoreSetRequest decoded = (StoreSetRequest) roundTrip(original);
     assertThat(decoded.key()).isEqualTo("key/日本語");
-    assertThat(decoded.value()).isEqualTo("value/λ/🙂");
+    assertThat(decoded.value().stringValue()).isEqualTo("value/λ/🙂");
   }
 
   @Test
   public void emptyStrings_roundTrip() throws IOException {
-    StoreSetRequest decoded = (StoreSetRequest) roundTrip(new StoreSetRequest(0, "", ""));
+    StoreSetRequest decoded =
+        (StoreSetRequest) roundTrip(new StoreSetRequest(0, "", StoreValue.ofString("")));
     assertThat(decoded.requestId()).isEqualTo(0);
     assertThat(decoded.key()).isEmpty();
-    assertThat(decoded.value()).isEmpty();
+    assertThat(decoded.value().stringValue()).isEmpty();
   }
 
   @Test
@@ -133,7 +171,7 @@ public final class CodecTest {
   public void read_truncatedPayload_throwsEOF() {
     ByteArrayOutputStream out = new ByteArrayOutputStream();
     try {
-      Codec.write(out, new StoreSetRequest(1, "k", "v"));
+      Codec.write(out, new StoreSetRequest(1, "k", StoreValue.ofString("v")));
     } catch (IOException e) {
       throw new AssertionError(e);
     }

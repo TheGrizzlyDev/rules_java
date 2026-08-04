@@ -15,7 +15,24 @@ package com.google.devtools.build.java.testrunner.extension;
 
 import java.util.Optional;
 
+/**
+ * Key-value store shared across all JVMs spawned by a coordinator. Values are typed; reads of a
+ * mismatched type throw {@link IllegalStateException}.
+ */
 public interface Store {
-  Optional<String> get(String key);
+  Optional<String> getString(String key);
+
+  Optional<Boolean> getBoolean(String key);
+
+  Optional<Long> getLong(String key);
+
+  Optional<Double> getDouble(String key);
+
   void set(String key, String value);
+
+  void set(String key, boolean value);
+
+  void set(String key, long value);
+
+  void set(String key, double value);
 }

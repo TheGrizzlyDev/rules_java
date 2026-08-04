@@ -17,9 +17,9 @@ package com.google.devtools.build.java.testrunner.wire;
 public final class StoreSetRequest implements Message {
   private final int requestId;
   private final String key;
-  private final String value;
+  private final StoreValue value;
 
-  public StoreSetRequest(int requestId, String key, String value) {
+  public StoreSetRequest(int requestId, String key, StoreValue value) {
     this.requestId = requestId;
     this.key = key;
     this.value = value;
@@ -33,7 +33,7 @@ public final class StoreSetRequest implements Message {
     return key;
   }
 
-  public String value() {
+  public StoreValue value() {
     return value;
   }
 }

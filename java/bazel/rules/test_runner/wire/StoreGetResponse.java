@@ -13,13 +13,13 @@
 // limitations under the License.
 package com.google.devtools.build.java.testrunner.wire;
 
-/** Coordinator → child. Reply to {@link StoreGetRequest}. When {@code present} is false, {@code value} is empty. */
+/** Coordinator → child. Reply to {@link StoreGetRequest}. When {@code present} is false, {@code value} is null. */
 public final class StoreGetResponse implements Message {
   private final int requestId;
   private final boolean present;
-  private final String value;
+  private final StoreValue value;
 
-  public StoreGetResponse(int requestId, boolean present, String value) {
+  public StoreGetResponse(int requestId, boolean present, StoreValue value) {
     this.requestId = requestId;
     this.present = present;
     this.value = value;
@@ -33,7 +33,7 @@ public final class StoreGetResponse implements Message {
     return present;
   }
 
-  public String value() {
+  public StoreValue value() {
     return value;
   }
 }

@@ -13,6 +13,7 @@
 // limitations under the License.
 package com.google.devtools.build.java.testrunner;
 
+import com.google.devtools.build.java.testrunner.wire.StoreValue;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -23,13 +24,13 @@ import java.util.concurrent.ConcurrentMap;
  */
 final class CoordinatorStore {
 
-  private final ConcurrentMap<String, String> map = new ConcurrentHashMap<>();
+  private final ConcurrentMap<String, StoreValue> map = new ConcurrentHashMap<>();
 
-  Optional<String> get(String key) {
+  Optional<StoreValue> get(String key) {
     return Optional.ofNullable(map.get(key));
   }
 
-  void set(String key, String value) {
+  void set(String key, StoreValue value) {
     map.put(key, value);
   }
 }

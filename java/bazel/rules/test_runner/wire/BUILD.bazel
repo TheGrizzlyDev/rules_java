@@ -26,6 +26,7 @@ java_library(
         "StoreGetResponse.java",
         "StoreSetAck.java",
         "StoreSetRequest.java",
+        "StoreValue.java",
         "TestFinished.java",
         "WireChannel.java",
         "WorkerShutdown.java",

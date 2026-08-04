@@ -90,14 +90,16 @@ public final class Codec {
       writeFramed(out, Tag.STORE_GET_RESPONSE, p -> {
         writeVarintInt(p, r.requestId());
         writeBool(p, r.present());
-        writeString(p, r.value());
+        if (r.present()) {
+          writeStoreValue(p, r.value());
+        }
       });
     } else if (msg instanceof StoreSetRequest) {
       StoreSetRequest r = (StoreSetRequest) msg;
       writeFramed(out, Tag.STORE_SET_REQUEST, p -> {
         writeVarintInt(p, r.requestId());
         writeString(p, r.key());
-        writeString(p, r.value());
+        writeStoreValue(p, r.value());
       });
     } else if (msg instanceof StoreSetAck) {
       StoreSetAck r = (StoreSetAck) msg;
@@ -136,10 +138,14 @@ public final class Codec {
         return WorkerShutdown.INSTANCE;
       case STORE_GET_REQUEST:
         return new StoreGetRequest(readVarintInt(p), readString(p));
-      case STORE_GET_RESPONSE:
-        return new StoreGetResponse(readVarintInt(p), readBool(p), readString(p));
+      case STORE_GET_RESPONSE: {
+        int reqId = readVarintInt(p);
+        boolean present = readBool(p);
+        StoreValue v = present ? readStoreValue(p) : null;
+        return new StoreGetResponse(reqId, present, v);
+      }
       case STORE_SET_REQUEST:
-        return new StoreSetRequest(readVarintInt(p), readString(p), readString(p));
+        return new StoreSetRequest(readVarintInt(p), readString(p), readStoreValue(p));
       case STORE_SET_ACK:
         return new StoreSetAck(readVarintInt(p));
       case TEST_FINISHED:
@@ -181,8 +187,63 @@ public final class Codec {
     return new String(readFully(in, length), StandardCharsets.UTF_8);
   }
 
+  private static void writeStoreValue(OutputStream out, StoreValue v) throws IOException {
+    out.write(v.kind().code());
+    switch (v.kind()) {
+      case STRING:
+        writeString(out, v.stringValue());
+        break;
+      case BOOLEAN:
+        writeBool(out, v.boolValue());
+        break;
+      case LONG:
+        writeLong(out, v.longValue());
+        break;
+      case DOUBLE:
+        writeLong(out, Double.doubleToRawLongBits(v.doubleValue()));
+        break;
+    }
+  }
+
+  private static StoreValue readStoreValue(InputStream in) throws IOException {
+    int code = in.read();
+    if (code < 0) {
+      throw new EOFException("unexpected EOF reading StoreValue tag");
+    }
+    StoreValue.Kind kind = StoreValue.Kind.fromCode(code);
+    switch (kind) {
+      case STRING:
+        return StoreValue.ofString(readString(in));
+      case BOOLEAN:
+        return StoreValue.ofBoolean(readBool(in));
+      case LONG:
+        return StoreValue.ofLong(readLong(in));
+      case DOUBLE:
+        return StoreValue.ofDouble(Double.longBitsToDouble(readLong(in)));
+    }
+    throw new AssertionError("unhandled kind " + kind);
+  }
+
   private static void writeBool(OutputStream out, boolean b) throws IOException {
     out.write(b ? 1 : 0);
+  }
+
+  private static void writeLong(OutputStream out, long v) throws IOException {
+    for (int i = 0; i < 8; i++) {
+      out.write((int) ((v >>> (i * 8)) & 0xFF));
+    }
+  }
+
+  private static long readLong(InputStream in) throws IOException {
+    long v = 0;
+    for (int i = 0; i < 8; i++) {
+      int b = in.read();
+      if (b < 0) {
+        throw new EOFException("unexpected EOF in long");
+      }
+      v |= ((long) (b & 0xFF)) << (i * 8);
+    }
+    return v;
   }
 
   private static boolean readBool(InputStream in) throws IOException {
