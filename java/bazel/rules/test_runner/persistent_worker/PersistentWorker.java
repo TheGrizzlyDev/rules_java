@@ -30,7 +30,9 @@ import java.util.List;
 
 /**
  * Runs a {@link WorkHandler} either as a persistent worker (Bazel proto protocol on stdin/stdout)
- * or as a one-shot invocation. Detects worker mode from a lone {@code --persistent_worker} argv.
+ * or as a one-shot invocation. Detects worker mode by scanning argv for {@code
+ * --persistent_worker}: if present, every other argv element becomes a sticky prefix prepended to
+ * each {@link WorkRequest}'s arguments before dispatch to the handler.
  *
  * <p>Singleplex only; multiplexing and cancellation are not yet implemented.
  */
@@ -42,15 +44,25 @@ public final class PersistentWorker {
 
   /** Entry point for tools. Never returns from worker mode until stdin EOF. */
   public static void run(String[] argv, WorkHandler handler) throws Exception {
-    if (argv.length == 1 && WORKER_FLAG.equals(argv[0])) {
-      workerLoop(handler);
+    List<String> sticky = new ArrayList<>();
+    boolean worker = false;
+    for (String a : argv) {
+      if (WORKER_FLAG.equals(a)) {
+        worker = true;
+      } else {
+        sticky.add(a);
+      }
+    }
+    if (worker) {
+      workerLoop(sticky, handler);
     } else {
       // One-shot: no capture, use real stdout/stderr.
       System.exit(handler.handle(expandArgFiles(argv), System.out, System.err));
     }
   }
 
-  private static void workerLoop(WorkHandler handler) throws IOException {
+  private static void workerLoop(List<String> stickyPrefix, WorkHandler handler)
+      throws IOException {
     // The real stdout is the protocol channel. Anything the handler writes to System.out via
     // library code would corrupt the wire, so we swap System.out and System.err with capture
     // streams for the duration of the loop.
@@ -75,7 +87,7 @@ public final class PersistentWorker {
           return; // EOF, clean shutdown.
         }
         // TODO: honor request.cancel and request.request_id for multiplexing/cancellation.
-        WorkResponse response = handle(handler, request, captured, capturedStream);
+        WorkResponse response = handle(handler, request, stickyPrefix, captured, capturedStream);
         response.writeDelimitedTo(protocolOut);
         protocolOut.flush();
       }
@@ -88,12 +100,16 @@ public final class PersistentWorker {
   private static WorkResponse handle(
       WorkHandler handler,
       WorkRequest request,
+      List<String> stickyPrefix,
       ByteArrayOutputStream captured,
       PrintStream capturedStream) {
     captured.reset();
     int exitCode;
     try {
-      exitCode = handler.handle(expandArgFiles(request.getArgumentsList()), capturedStream, capturedStream);
+      List<String> merged = new ArrayList<>(stickyPrefix.size() + request.getArgumentsCount());
+      merged.addAll(stickyPrefix);
+      merged.addAll(request.getArgumentsList());
+      exitCode = handler.handle(expandArgFiles(merged), capturedStream, capturedStream);
     } catch (Throwable t) {
       StringWriter sw = new StringWriter();
       t.printStackTrace(new PrintWriter(sw));

@@ -54,6 +54,16 @@ export RUNFILES_MANIFEST_FILE="${JAVA_RUNFILES}/MANIFEST"
 export RUNFILES_MANIFEST_ONLY=%runfiles_manifest_only%
 export SELF_LOCATION="$self"
 
+if [[ $# -eq 1 && $1 == "--persistent_worker" ]]; then
+  # PTR mode: keep the runner alive and let it read WorkRequests on stdin.
+  # The sticky argv (--config=..., --) is prepended to every request's argv
+  # inside the runner (see PersistentWorker.run).
+  exec %test_runner% \
+    --config="${JAVA_RUNFILES}/%config_rlocation%" \
+    -- \
+    --persistent_worker
+fi
+
 exec %test_runner% \
   --config="${JAVA_RUNFILES}/%config_rlocation%" \
   -- "$@"

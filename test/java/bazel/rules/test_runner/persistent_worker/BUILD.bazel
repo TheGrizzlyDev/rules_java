@@ -11,23 +11,28 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-load("@com_google_protobuf//bazel:java_proto_library.bzl", "java_proto_library")
-load("//java:defs.bzl", "java_library")
+load("//java:defs.bzl", "java_import", "java_test")
 
 package(default_applicable_licenses = ["@rules_java//:license"])
 
-java_proto_library(
-    name = "worker_protocol_java_proto",
-    visibility = ["//visibility:public"],
-    deps = ["@bazel_tools//src/main/protobuf:worker_protocol_proto"],
+java_test(
+    name = "PersistentWorkerTest",
+    srcs = ["PersistentWorkerTest.java"],
+    test_class = "com.google.devtools.build.java.testrunner.persistent_worker.PersistentWorkerTest",
+    deps = [
+        ":guava",
+        ":truth",
+        "//java/bazel/rules/test_runner/persistent_worker:persistent_worker_lib",
+        "//java/bazel/rules/test_runner/persistent_worker:worker_protocol_java_proto",
+    ],
 )
 
-java_library(
-    name = "persistent_worker_lib",
-    srcs = [
-        "PersistentWorker.java",
-        "WorkHandler.java",
-    ],
-    visibility = ["//visibility:public"],
-    deps = [":worker_protocol_java_proto"],
+java_import(
+    name = "guava",
+    jars = ["@guava//file"],
+)
+
+java_import(
+    name = "truth",
+    jars = ["@truth//file"],
 )

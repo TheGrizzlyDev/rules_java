@@ -18,10 +18,15 @@ load("//java/common/rules:java_binary.bzl", "BASE_TEST_ATTRIBUTES", "attr_java_d
 load("//java/common/rules:rule_util.bzl", "merge_attrs")
 load("//java/common/rules/impl:java_binary_impl.bzl", "binary_provider_helper")
 load("//java/bazel/rules/test_runner:extensions.bzl", "scan_extensions_aspect")
+load("//java/bazel/rules/test_runner:persistent_test_info.bzl", "persistent_test_info_providers")
 load(":bazel_java_binary.bzl", "BASE_BINARY_ATTRS", "bazel_base_binary_impl", "make_binary_rule")
 
 def _bazel_java_test_impl(ctx):
-    return bazel_base_binary_impl(ctx, is_test_rule_class = True) + binary_provider_helper.test_providers(ctx)
+    return (
+        bazel_base_binary_impl(ctx, is_test_rule_class = True) +
+        binary_provider_helper.test_providers(ctx) +
+        persistent_test_info_providers(ctx)
+    )
 
 def _java_test_initializer(**kwargs):
     if "stamp" in kwargs and type(kwargs["stamp"]) == type(True):
