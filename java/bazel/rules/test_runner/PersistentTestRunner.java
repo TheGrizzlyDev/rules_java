@@ -70,7 +70,19 @@ public final class PersistentTestRunner {
       } else if ("--".equals(arg)) {
         afterSeparator = true;
       } else if (arg.startsWith("--config=")) {
-        config = Config.parse(Paths.get(arg.substring("--config=".length())));
+        // Two supported shapes:
+        //   - one-shot mode (wrapper.sh runs): path is already absolute
+        //     (${JAVA_RUNFILES}/…) — pass through.
+        //   - worker mode (coordinator as PTR worker): path is exec-root
+        //     relative (bazel-out/…); the coordinator's cwd is the exec root,
+        //     so a plain Paths.get resolves correctly.
+        // If neither works, fall back to runfiles rlocation for legacy paths.
+        String raw = arg.substring("--config=".length());
+        Path cfgPath = Paths.get(raw);
+        if (!Files.exists(cfgPath)) {
+          cfgPath = Paths.get(resolveRunfile(Runfiles.preload().unmapped(), raw));
+        }
+        config = Config.parse(cfgPath);
       } else {
         throw new IllegalArgumentException("unrecognized runner arg: " + arg);
       }

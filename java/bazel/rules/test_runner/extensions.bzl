@@ -8,6 +8,7 @@ PersistentJvmTestRunnerExtensionInfo = provider(
         "class_lists": "depset[File] — .extensions.txt files, one class name per line.",
         "digest_files": "depset[File] — .digest.txt files, one `path\\tsha256` line per jar.",
         "manifests": "depset[File] — per-target manifests linking a target's scans to the digest set that must be tracked as tools when a scan is non-empty.",
+        "jars": "depset[File] — every jar the aspect scanned. Forwarded as PersistentTestInfo.tools so WorkerKey tracks any change to jars that could carry extension classes. Includes non-extension jars too because scan results are only known at execution time.",
     },
 )
 
@@ -16,6 +17,7 @@ _ATTRS_TO_TRAVERSE = ["deps", "runtime_deps", "exports"]
 def _scan_extensions_aspect_impl(target, ctx):
     direct_class_lists = []
     direct_digest_files = []
+    direct_jars = []
     if JavaInfo in target:
         for jar in target[JavaInfo].runtime_output_jars:
             extensions_out = ctx.actions.declare_file(jar.basename + ".extensions.txt")
@@ -39,10 +41,12 @@ def _scan_extensions_aspect_impl(target, ctx):
             )
             direct_class_lists.append(extensions_out)
             direct_digest_files.append(digest_out)
+            direct_jars.append(jar)
 
     transitive_class_lists = []
     transitive_digest_files = []
     transitive_manifests = []
+    transitive_jars = []
     for attr_name in _ATTRS_TO_TRAVERSE:
         for dep in getattr(ctx.rule.attr, attr_name, None) or []:
             if PersistentJvmTestRunnerExtensionInfo in dep:
@@ -50,9 +54,11 @@ def _scan_extensions_aspect_impl(target, ctx):
                 transitive_class_lists.append(info.class_lists)
                 transitive_digest_files.append(info.digest_files)
                 transitive_manifests.append(info.manifests)
+                transitive_jars.append(info.jars)
 
     class_lists = depset(direct = direct_class_lists, transitive = transitive_class_lists)
     digest_files = depset(direct = direct_digest_files, transitive = transitive_digest_files)
+    jars = depset(direct = direct_jars, transitive = transitive_jars)
 
     direct_manifests = []
     if direct_class_lists or direct_digest_files:
@@ -71,6 +77,7 @@ def _scan_extensions_aspect_impl(target, ctx):
             class_lists = class_lists,
             digest_files = digest_files,
             manifests = manifests,
+            jars = jars,
         ),
         OutputGroupInfo(
             extensions_class_lists = class_lists,

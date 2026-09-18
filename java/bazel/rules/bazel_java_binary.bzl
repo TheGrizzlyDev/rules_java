@@ -27,6 +27,7 @@ load("//java/common/rules/impl:java_binary_deploy_jar.bzl", "create_deploy_archi
 load("//java/common/rules/impl:java_binary_impl.bzl", "basic_java_binary", "binary_provider_helper")
 load("//java/common/rules/impl:java_helper.bzl", "helper")
 load("//java/bazel/rules/test_runner:extensions.bzl", "PersistentJvmTestRunnerExtensionInfo")
+load("//java/bazel/rules/test_runner:persistent_test_info.bzl", "persistent_test_info_providers")
 load("//java/private:java_info.bzl", "JavaInfo")
 
 _JVM_TEST_TOOLCHAIN_TYPE = "//java/bazel/rules:jvm_test_toolchain_type"
@@ -102,9 +103,9 @@ def bazel_base_binary_impl(ctx, is_test_rule_class):
 
     jvm_test_toolchain = _resolve_jvm_test_toolchain(ctx, is_test_rule_class)
 
-    extra_runfiles = []
+    stub_result = struct(extra_runfiles = [], ptr_state = None)
     if executable:
-        extra_runfiles = _create_stub(ctx, java_attrs, launcher_info.launcher, executable, jvm_flags, main_class, coverage_main_class, jvm_test_toolchain)
+        stub_result = _create_stub(ctx, java_attrs, launcher_info.launcher, executable, jvm_flags, main_class, coverage_main_class, jvm_test_toolchain)
 
     runfiles = default_info.runfiles
 
@@ -121,8 +122,8 @@ def bazel_base_binary_impl(ctx, is_test_rule_class):
         for dep in jvm_test_toolchain.additional_deps:
             runfiles = runfiles.merge(ctx.runfiles(transitive_files = depset(transitive = [dep[JavaInfo].transitive_runtime_jars])))
 
-    if extra_runfiles:
-        runfiles = runfiles.merge(ctx.runfiles(files = extra_runfiles))
+    if stub_result.extra_runfiles:
+        runfiles = runfiles.merge(ctx.runfiles(files = stub_result.extra_runfiles))
 
     providers["DefaultInfo"] = DefaultInfo(
         files = default_info.files,
@@ -142,7 +143,10 @@ def bazel_base_binary_impl(ctx, is_test_rule_class):
         add_opens = info.add_opens,
     )
 
-    return providers.values()
+    result = list(providers.values())
+    if is_test_rule_class and jvm_test_toolchain and stub_result.ptr_state:
+        result.extend(persistent_test_info_providers(ctx, jvm_test_toolchain, stub_result.ptr_state))
+    return result
 
 def _get_coverage_runner(ctx):
     if ctx.configuration.coverage_enabled and ctx.attr.create_executable:
@@ -253,7 +257,8 @@ def _create_stub(ctx, java_attrs, launcher, executable, jvm_flags, main_class, c
         jvm_flags_for_launcher = []
         for flag in jvm_flags:
             jvm_flags_for_launcher.extend(ctx.tokenize(flag))
-        return _create_windows_exe_launcher(ctx, java_executable, classpath, main_class, jvm_flags_for_launcher, runfiles_enabled, coverage_enabled, executable, coverage_main_class, test_runner_executable)
+        windows_extra = _create_windows_exe_launcher(ctx, java_executable, classpath, main_class, jvm_flags_for_launcher, runfiles_enabled, coverage_enabled, executable, coverage_main_class, test_runner_executable)
+        return struct(extra_runfiles = windows_extra, ptr_state = None)
 
     if test_runner_executable:
         return _create_test_runner_wrapper(
@@ -306,7 +311,7 @@ def _create_stub(ctx, java_attrs, launcher, executable, jvm_flags, main_class, c
         computed_substitutions = td,
         is_executable = True,
     )
-    return []
+    return struct(extra_runfiles = [], ptr_state = None)
 
 def _format_classpath_entry(runfiles_enabled, workspace_prefix, file):
     if runfiles_enabled:
@@ -353,9 +358,9 @@ def _create_test_runner_wrapper(
         allow_closure = True,
     )
 
-    extensions_file = _aggregate_extension_class_lists(ctx)
-    if extensions_file:
-        config_args.add(paths.normalize(workspace_prefix + extensions_file.short_path), format = "extensions_file=%s")
+    extensions = _aggregate_extension_class_lists(ctx)
+    if extensions:
+        config_args.add(paths.normalize(workspace_prefix + extensions.file.short_path), format = "extensions_file=%s")
 
     ctx.actions.write(config, config_args)
 
@@ -376,12 +381,29 @@ def _create_test_runner_wrapper(
         },
         is_executable = True,
     )
-    extra = [config]
-    if extensions_file:
-        extra.append(extensions_file)
-    return extra
+    extra_runfiles = [config]
+    if extensions:
+        extra_runfiles.append(extensions.file)
+    return struct(
+        extra_runfiles = extra_runfiles,
+        ptr_state = struct(
+            config = config,
+            classpath = classpath,
+            additional_jars = additional_jars,
+            extensions_file = extensions.file if extensions else None,
+            extension_jars = extensions.jars if extensions else depset(),
+        ),
+    )
 
 def _aggregate_extension_class_lists(ctx):
+    """Returns struct(file=<aggregated txt>, jars=depset[File]) or None.
+
+    `file` is the aggregated extensions.txt (one class name per line) that the
+    runner reads at startup. `jars` is the union of every jar the aspect
+    scanned; it becomes PersistentTestInfo.tools so WorkerKey depends on the
+    jar set (over-keys: includes non-extension jars because scan results are
+    only known at execution time).
+    """
     aggregator = getattr(ctx.attr, "_extension_aggregator", None)
     if aggregator == None:
         return None
@@ -389,6 +411,14 @@ def _aggregate_extension_class_lists(ctx):
     class_lists = depset(
         transitive = [
             dep[PersistentJvmTestRunnerExtensionInfo].class_lists
+            for attr_name in ("deps", "runtime_deps")
+            for dep in getattr(ctx.attr, attr_name, None) or []
+            if PersistentJvmTestRunnerExtensionInfo in dep
+        ],
+    )
+    jars = depset(
+        transitive = [
+            dep[PersistentJvmTestRunnerExtensionInfo].jars
             for attr_name in ("deps", "runtime_deps")
             for dep in getattr(ctx.attr, attr_name, None) or []
             if PersistentJvmTestRunnerExtensionInfo in dep
@@ -406,7 +436,7 @@ def _aggregate_extension_class_lists(ctx):
         outputs = [output],
         mnemonic = "AggregateTestRunnerExtensions",
     )
-    return output
+    return struct(file = output, jars = jars)
 
 def _create_windows_exe_launcher(ctx, java_executable, classpath, main_class, jvm_flags_for_launcher, runfiles_enabled, coverage_enabled, executable, coverage_main_class, test_runner_executable = None):
     launch_info = ctx.actions.args().use_param_file("%s", use_always = True).set_param_file_format("multiline")
