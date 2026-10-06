@@ -215,6 +215,7 @@ public final class PersistentTestRunner {
     }
     ensureUtf8Locale(pb);
 
+    long startupStarted = System.nanoTime();
     Process process = pb.start();
     Thread stdoutDrain = drain(process.getInputStream(), stdout, "child-stdout-drain");
     Thread stderrDrain = drain(process.getErrorStream(), stderr, "child-stderr-drain");
@@ -224,7 +225,10 @@ public final class PersistentTestRunner {
 
     WireChannel channel;
     try {
-      channel = FifoConnection.open(process, c2j, j2c, startupTimeoutMillis);
+      long connectionTimeout = startupTimeoutMillis == 0 ? 0 : Math.max(1,
+          startupTimeoutMillis - java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(
+              System.nanoTime() - startupStarted));
+      channel = FifoConnection.open(process, c2j, j2c, connectionTimeout);
     } catch (IOException | InterruptedException e) {
       process.destroyForcibly();
       // Bound cleanup even if a descendant has inherited the child's output pipes.
@@ -252,7 +256,12 @@ public final class PersistentTestRunner {
 
     int exitCode;
     try {
-      exitCode = runSession(channel, process);
+      exitCode = runSession(channel, process, startupStarted, startupTimeoutMillis);
+    } catch (IOException | InterruptedException e) {
+      // Kill before closing the buffered input stream: close can wait for a
+      // blocked reader's monitor, which only releases when the peer closes.
+      process.destroyForcibly();
+      throw e;
     } finally {
       try {
         channel.close();
@@ -269,17 +278,18 @@ public final class PersistentTestRunner {
       Files.deleteIfExists(j2c);
       Files.deleteIfExists(ipcDir);
       pool.release(tracker);
-    }
-
-    if (classpathJar != null) {
-      Files.deleteIfExists(classpathJar);
+      if (classpathJar != null) {
+        Files.deleteIfExists(classpathJar);
+      }
     }
     return exitCode;
   }
 
-  private int runSession(WireChannel channel, Process process)
+  private int runSession(
+      WireChannel channel, Process process, long startupStarted, long startupTimeoutMillis)
       throws IOException, InterruptedException {
     CompletableFuture<Integer> finished = new CompletableFuture<>();
+    CompletableFuture<Void> ready = new CompletableFuture<>();
     Thread reader =
         new Thread(
             () -> {
@@ -297,12 +307,20 @@ public final class PersistentTestRunner {
                     finished.complete(process.exitValue());
                     return;
                   }
+                  if (!ready.isDone() && !(msg instanceof SessionReady)) {
+                    throw new IOException("Expected SessionReady during child startup, got "
+                        + msg.getClass().getSimpleName());
+                  }
                   handle(channel, msg, finished);
+                  if (msg instanceof SessionReady) {
+                    ready.complete(null);
+                  }
                   if (finished.isDone()) {
                     return;
                   }
                 }
-              } catch (IOException e) {
+              } catch (IOException | RuntimeException e) {
+                ready.completeExceptionally(e);
                 finished.completeExceptionally(e);
               }
             },
@@ -312,6 +330,26 @@ public final class PersistentTestRunner {
 
     channel.send(SessionStart.INSTANCE);
     try {
+      while (!ready.isDone()) {
+        if (!process.isAlive()) {
+          throw new IOException("Child exited with status " + process.exitValue()
+              + " before SessionReady; see child stderr above");
+        }
+        long remaining = startupTimeoutMillis == 0 ? Long.MAX_VALUE
+            : java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(startupTimeoutMillis)
+                - (System.nanoTime() - startupStarted);
+        if (remaining <= 0) {
+          throw new IOException("Child startup timed out after " + startupTimeoutMillis
+              + " ms waiting for SessionReady (including FIFO connection)");
+        }
+        try {
+          ready.get(Math.min(remaining, java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(50)),
+              java.util.concurrent.TimeUnit.NANOSECONDS);
+        } catch (java.util.concurrent.TimeoutException e) {
+          // Recheck process exit and the shared startup deadline.
+        }
+      }
+      ready.get(); // Surface reader/protocol errors even if completion preceded the loop.
       return finished.get();
     } catch (java.util.concurrent.ExecutionException e) {
       Throwable cause = e.getCause();
