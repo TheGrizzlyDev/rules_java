@@ -126,6 +126,17 @@ public final class PersistentTestRunner {
     int limit = wrapperArgs.classpathLimit != null ? wrapperArgs.classpathLimit : classpathLimit();
     boolean useClasspathJar = classpathString.length() > limit;
 
+    // Allow slow startup to be configured without changing per-test JVM flags.
+    long startupTimeoutSeconds = Long.parseLong(
+        System.getProperty("bazel.persistent.startup_timeout_seconds", "30"));
+    if (startupTimeoutSeconds <= 0 || startupTimeoutSeconds > Long.MAX_VALUE / 1000) {
+      throw new IllegalArgumentException("bazel.persistent.startup_timeout_seconds must be positive");
+    }
+    long startupTimeoutMillis = startupTimeoutSeconds * 1000;
+    if (wrapperArgs.jvmDebugPort != null && "y".equals(wrapperArgs.jvmDebugSuspend)) {
+      startupTimeoutMillis = 0; // Wait for debugger attachment, but still detect child exit.
+    }
+
     // TODO: add Windows support (needs named pipes instead of FIFOs).
     Path ipcDir = Files.createTempDirectory("persistent-test-runner-ipc-");
     Path c2j = ipcDir.resolve("c2j-" + UUID.randomUUID() + ".pipe");
@@ -211,17 +222,32 @@ public final class PersistentTestRunner {
     pool.register(tracker);
     logSpawnedJvm(tracker, stderr);
 
-    // Order matters: coordinator opens write side first (blocks until child opens the matching
-    // read side), then the read side (blocks until child opens the matching write side). Child
-    // does the mirror order. Explicit locals to avoid Java's arg-evaluation-order pitfall.
     WireChannel channel;
     try {
-      java.io.OutputStream coordWrite = Files.newOutputStream(c2j);
-      java.io.InputStream coordRead = Files.newInputStream(j2c);
-      channel = new WireChannel(coordRead, coordWrite);
-    } catch (IOException e) {
+      channel = FifoConnection.open(process, c2j, j2c, startupTimeoutMillis);
+    } catch (IOException | InterruptedException e) {
       process.destroyForcibly();
-      throw e;
+      // Bound cleanup even if a descendant has inherited the child's output pipes.
+      try {
+        process.waitFor(1, java.util.concurrent.TimeUnit.SECONDS);
+        stdoutDrain.join(1000);
+        stderrDrain.join(1000);
+      } catch (InterruptedException cleanupInterrupted) {
+        e.addSuppressed(cleanupInterrupted);
+        Thread.currentThread().interrupt();
+      }
+      Files.deleteIfExists(c2j);
+      Files.deleteIfExists(j2c);
+      Files.deleteIfExists(ipcDir);
+      if (classpathJar != null) {
+        Files.deleteIfExists(classpathJar);
+      }
+      pool.release(tracker);
+      if (e instanceof InterruptedException) {
+        throw (InterruptedException) e;
+      }
+      throw new IOException("Child startup failed: " + e.getMessage()
+          + "\nCommand: " + String.join(" ", command), e);
     }
 
     int exitCode;
