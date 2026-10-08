@@ -24,7 +24,7 @@ Our wiring:
   the WorkerKey.
 - worker_tools → extension jars + aggregated extensions.txt (currently also
   includes ordinary scanned jars; stabilizing this identity is separate work).
-- test_args → `--config=<execpath>` for this target's execution-path config.
+- test_args → `--config <execpath> --` for this target's execution-path config.
   Bazel materializes these arguments in a per-test paramfile.
 - test_inputs → config, classpaths, extensions, and the original test's runfiles
   files, including its Java runtime and data dependencies.
@@ -60,6 +60,9 @@ def persistent_test_info_providers(ctx, jvm_test_toolchain, ptr_state, runfiles)
     # before changing cwd when persistent execution is disabled.
     test_args.add("--config")
     test_args.add(ptr_state.config)
+    # Bazel must append ordinary rule args and --test_arg after this boundary
+    # in the per-request paramfile, rather than in the worker startup argv.
+    test_args.add("--")
 
     return [
         testing.PersistentTestInfo(

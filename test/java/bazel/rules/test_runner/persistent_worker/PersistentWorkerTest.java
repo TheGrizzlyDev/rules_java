@@ -59,7 +59,7 @@ public final class PersistentWorkerTest {
         new PrintStream(responseBytes),
         () ->
             PersistentWorker.run(
-                new String[] {"--config=/tmp/cfg.pb", "--", "--persistent_worker"}, handler));
+                new String[] {"--config=/tmp/cfg.pb", "--persistent_worker", "--"}, handler));
 
     assertThat(seen).hasSize(2);
     assertThat(seen.get(0)).isEqualTo(Arrays.asList("--config=/tmp/cfg.pb", "--", "first"));

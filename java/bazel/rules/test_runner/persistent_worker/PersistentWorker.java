@@ -36,8 +36,8 @@ import java.util.Map;
 /**
  * Runs a {@link WorkHandler} either as a persistent worker (Bazel proto protocol on stdin/stdout)
  * or as a one-shot invocation. Detects worker mode by scanning argv for {@code
- * --persistent_worker}: if present, every other argv element becomes a sticky prefix prepended to
- * each {@link WorkRequest}'s arguments before dispatch to the handler.
+ * --persistent_worker} before {@code --}: if present, every other argv element becomes a sticky
+ * prefix prepended to each {@link WorkRequest}'s arguments before dispatch to the handler.
  *
  * <p>Singleplex only; multiplexing and cancellation are not yet implemented.
  */
@@ -51,11 +51,15 @@ public final class PersistentWorker {
   public static void run(String[] argv, WorkHandler handler) throws Exception {
     List<String> sticky = new ArrayList<>();
     boolean worker = false;
+    boolean afterSeparator = false;
     for (String a : argv) {
-      if (WORKER_FLAG.equals(a)) {
+      if (!afterSeparator && WORKER_FLAG.equals(a)) {
         worker = true;
       } else {
         sticky.add(a);
+        if ("--".equals(a)) {
+          afterSeparator = true;
+        }
       }
     }
     if (worker) {
@@ -114,8 +118,10 @@ public final class PersistentWorker {
       List<String> merged = new ArrayList<>(stickyPrefix.size() + request.getArgumentsCount());
       merged.addAll(stickyPrefix);
       merged.addAll(request.getArgumentsList());
+      // Bazel has already expanded request paramfiles. A request argument beginning
+      // with @ is data, not another file for this worker to open.
       exitCode = handler.handle(
-          expandArgFiles(merged), requestEnvironment(request), capturedStream, capturedStream);
+          merged, requestEnvironment(request), capturedStream, capturedStream);
     } catch (Throwable t) {
       StringWriter sw = new StringWriter();
       t.printStackTrace(new PrintWriter(sw));
@@ -153,7 +159,7 @@ public final class PersistentWorker {
     return Collections.unmodifiableMap(environment);
   }
 
-  /** Splices any {@code @paramfile} arg into its lines, in place. Escapes {@code @@} → {@code @}. */
+  /** Expands one-shot paramfiles before {@code --}; test arguments after it remain literal. */
   private static List<String> expandArgFiles(String[] argv) throws IOException {
     List<String> in = new ArrayList<>(argv.length);
     for (String a : argv) {
@@ -164,15 +170,24 @@ public final class PersistentWorker {
 
   private static List<String> expandArgFiles(List<String> argv) throws IOException {
     List<String> out = new ArrayList<>(argv.size());
+    boolean afterSeparator = false;
     for (String arg : argv) {
-      if (arg.startsWith("@@")) {
+      if (afterSeparator) {
+        out.add(arg);
+      } else if (arg.startsWith("@@")) {
         out.add("@" + arg.substring(2));
       } else if (arg.startsWith("@")) {
         for (String line : Files.readAllLines(Paths.get(arg.substring(1)), StandardCharsets.UTF_8)) {
           out.add(line);
+          if ("--".equals(line)) {
+            afterSeparator = true;
+          }
         }
       } else {
         out.add(arg);
+        if ("--".equals(arg)) {
+          afterSeparator = true;
+        }
       }
     }
     return out;
