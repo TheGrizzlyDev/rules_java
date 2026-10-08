@@ -42,6 +42,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.jar.Attributes;
 import java.util.jar.JarOutputStream;
 import java.util.jar.Manifest;
@@ -158,6 +159,14 @@ public final class PersistentTestRunner {
     if (wrapperArgs.jvmDebugPort != null && "y".equals(wrapperArgs.jvmDebugSuspend)) {
       startupTimeoutMillis = 0; // Wait for debugger attachment, but still detect child exit.
     }
+
+    long shutdownTimeoutSeconds = Long.parseLong(
+        System.getProperty("bazel.persistent.shutdown_timeout_seconds", "30"));
+    if (shutdownTimeoutSeconds <= 0 || shutdownTimeoutSeconds > Long.MAX_VALUE / 1_000_000_000) {
+      throw new IllegalArgumentException("bazel.persistent.shutdown_timeout_seconds must be positive"
+          + " and representable in nanoseconds");
+    }
+    long shutdownTimeoutNanos = TimeUnit.SECONDS.toNanos(shutdownTimeoutSeconds);
 
     // TODO: add Windows support (needs named pipes instead of FIFOs).
     Path ipcDir = Files.createTempDirectory("persistent-test-runner-ipc-");
@@ -278,23 +287,38 @@ public final class PersistentTestRunner {
           + "\nCommand: " + String.join(" ", command), e);
     }
 
-    int exitCode;
     try {
-      exitCode = runSession(channel, process, startupStarted, startupTimeoutMillis);
-    } catch (IOException | InterruptedException e) {
-      // Kill before closing the buffered input stream: close can wait for a
-      // blocked reader's monitor, which only releases when the peer closes.
-      process.destroyForcibly();
-      throw e;
-    } finally {
-      try {
-        channel.close();
-      } catch (IOException ignored) {
+      Integer reportedExitCode = runSession(channel, process, startupStarted, startupTimeoutMillis);
+      // TestFinished and wire EOF both start shutdown. Neither proves that the
+      // process has exited: System.exit can still be running user shutdown hooks.
+      long shutdownStarted = System.nanoTime();
+      if (!process.waitFor(remainingNanos(shutdownStarted, shutdownTimeoutNanos),
+          TimeUnit.NANOSECONDS)
+          || !joinWithin(stdoutDrain, shutdownStarted, shutdownTimeoutNanos)
+          || !joinWithin(stderrDrain, shutdownStarted, shutdownTimeoutNanos)) {
+        throw new IOException("Child shutdown timed out after " + shutdownTimeoutSeconds
+            + " seconds waiting for process exit and output draining");
       }
-      // Wait for drains to finish so any last stdout/stderr bytes make it into the response.
+      return reportedExitCode == null ? process.exitValue() : reportedExitCode;
+    } finally {
+      // Also bound cleanup on protocol errors, interruption, and inherited pipes.
+      // Closing a buffered wire stream can wait on its blocked reader's monitor.
+      process.destroyForcibly();
+      Thread closeChannel = new Thread(() -> {
+        try {
+          channel.close();
+        } catch (IOException ignored) {
+        }
+      }, "persistent-test-runner-wire-close");
+      closeChannel.setDaemon(true);
+      closeChannel.start();
+      long cleanupStarted = System.nanoTime();
+      long cleanupNanos = TimeUnit.SECONDS.toNanos(1);
       try {
-        stdoutDrain.join();
-        stderrDrain.join();
+        process.waitFor(remainingNanos(cleanupStarted, cleanupNanos), TimeUnit.NANOSECONDS);
+        joinWithin(closeChannel, cleanupStarted, cleanupNanos);
+        joinWithin(stdoutDrain, cleanupStarted, cleanupNanos);
+        joinWithin(stderrDrain, cleanupStarted, cleanupNanos);
       } catch (InterruptedException e) {
         Thread.currentThread().interrupt();
       }
@@ -306,10 +330,22 @@ public final class PersistentTestRunner {
         Files.deleteIfExists(classpathJar);
       }
     }
-    return exitCode;
   }
 
-  private int runSession(
+  private static long remainingNanos(long started, long budget) {
+    return Math.max(0, budget - (System.nanoTime() - started));
+  }
+
+  private static boolean joinWithin(Thread thread, long started, long budget)
+      throws InterruptedException {
+    long remaining = remainingNanos(started, budget);
+    if (remaining > 0) {
+      TimeUnit.NANOSECONDS.timedJoin(thread, remaining);
+    }
+    return !thread.isAlive();
+  }
+
+  private Integer runSession(
       WireChannel channel, Process process, long startupStarted, long startupTimeoutMillis)
       throws IOException, InterruptedException {
     CompletableFuture<Integer> finished = new CompletableFuture<>();
@@ -321,14 +357,9 @@ public final class PersistentTestRunner {
                 while (true) {
                   Message msg = channel.read();
                   if (msg == null) {
-                    // Child closed the wire without sending TestFinished. Wait for the
-                    // process to exit so we can report its real exit code.
-                    try {
-                      process.waitFor();
-                    } catch (InterruptedException e) {
-                      Thread.currentThread().interrupt();
-                    }
-                    finished.complete(process.exitValue());
+                    // Let the request thread apply the shutdown budget and obtain
+                    // the exit status, rather than waiting unboundedly in this reader.
+                    finished.complete(null);
                     return;
                   }
                   if (!ready.isDone() && !(msg instanceof SessionReady)) {
