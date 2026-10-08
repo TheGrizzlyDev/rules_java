@@ -124,6 +124,8 @@ public final class PersistentTestRunner {
       throw new IllegalStateException("driver_main is required in the config");
     }
 
+    environment = TestEnvironment.prepare(
+        environment, config.execPaths ? config.execRoot : Paths.get("").toAbsolutePath());
     Runfiles runfiles = config.execPaths ? null : Runfiles.preload().unmapped();
 
     String javabin = resolveConfigPath(config, runfiles, config.javabin);

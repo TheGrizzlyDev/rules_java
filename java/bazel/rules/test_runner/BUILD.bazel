@@ -24,6 +24,7 @@ java_binary(
         "JvmPool.java",
         "JvmProcess.java",
         "PersistentTestRunner.java",
+        "TestEnvironment.java",
         "WrapperArgs.java",
     ],
     main_class = "com.google.devtools.build.java.testrunner.PersistentTestRunner",
