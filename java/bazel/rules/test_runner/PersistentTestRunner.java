@@ -23,6 +23,7 @@ import com.google.devtools.build.java.testrunner.wire.StoreSetAck;
 import com.google.devtools.build.java.testrunner.wire.StoreSetRequest;
 import com.google.devtools.build.java.testrunner.wire.StoreValue;
 import com.google.devtools.build.java.testrunner.wire.TestFinished;
+import com.google.devtools.build.java.testrunner.wire.TestStart;
 import com.google.devtools.build.java.testrunner.wire.WireChannel;
 import com.google.devtools.build.java.testrunner.wire.WorkerShutdown;
 import com.google.devtools.build.java.testrunner.wire.WorkerStart;
@@ -55,19 +56,28 @@ public final class PersistentTestRunner {
 
   private final JvmPool pool = new JvmPool(MAX_JVMS);
   private final CoordinatorStore store = new CoordinatorStore();
+  private final List<ReusableJvm> reusableChildren = new ArrayList<>();
 
   private PersistentTestRunner() {}
 
   public static void main(String[] args) throws Exception {
-    PersistentWorker.run(args, new PersistentTestRunner()::handleRequest);
+    PersistentTestRunner runner = new PersistentTestRunner();
+    Runtime.getRuntime()
+        .addShutdownHook(new Thread(runner::closeChildren, "persistent-test-runner-shutdown"));
+    try {
+      PersistentWorker.run(args, runner::handleRequest);
+    } finally {
+      runner.closeChildren();
+    }
   }
 
   int handleRequest(List<String> args, PrintStream stdout, PrintStream stderr) throws Exception {
     return handleRequest(args, System.getenv(), stdout, stderr);
   }
 
-  int handleRequest(List<String> args, Map<String, String> environment,
-      PrintStream stdout, PrintStream stderr) throws Exception {
+  int handleRequest(
+      List<String> args, Map<String, String> environment, PrintStream stdout, PrintStream stderr)
+      throws Exception {
     Config config = null;
     List<String> forwarded = new ArrayList<>();
     boolean afterSeparator = false;
@@ -114,8 +124,13 @@ public final class PersistentTestRunner {
     return run(config, testArgs, System.getenv(), stdout, stderr);
   }
 
-  int run(Config config, List<String> testArgs, Map<String, String> environment,
-      PrintStream stdout, PrintStream stderr) throws Exception {
+  int run(
+      Config config,
+      List<String> testArgs,
+      Map<String, String> environment,
+      PrintStream stdout,
+      PrintStream stderr)
+      throws Exception {
     WrapperArgs wrapperArgs = WrapperArgs.parse(testArgs, environment);
     if (wrapperArgs.printJavabin || "--print_javabin".equals(config.mainClass)) {
       stdout.print(config.javabin);
@@ -125,8 +140,9 @@ public final class PersistentTestRunner {
       throw new IllegalStateException("driver_main is required in the config");
     }
 
-    environment = TestEnvironment.prepare(
-        environment, config.execPaths ? config.execRoot : Paths.get("").toAbsolutePath());
+    environment =
+        TestEnvironment.prepare(
+            environment, config.execPaths ? config.execRoot : Paths.get("").toAbsolutePath());
     Runfiles runfiles = config.execPaths ? null : Runfiles.preload().unmapped();
 
     String javabin = resolveConfigPath(config, runfiles, config.javabin);
@@ -145,26 +161,39 @@ public final class PersistentTestRunner {
     if (wrapperArgs.mainAdviceClasspath != null && !wrapperArgs.mainAdviceClasspath.isEmpty()) {
       classpath.add(0, wrapperArgs.mainAdviceClasspath);
     }
+    if (config.mainClass.equals("com.google.testing.junit.runner.BazelTestRunner")
+        && config.driverMain.equals("com.google.devtools.build.java.testrunner.JvmDriver")
+        && config.coverageMainClass == null
+        && wrapperArgs.mainAdvice == null
+        && wrapperArgs.mainAdviceClasspath == null
+        && wrapperArgs.jvmDebugPort == null
+        && !System.getProperty("bazel.persistent.reuse", "true").equals("false")) {
+      return runReusable(
+          config, wrapperArgs, environment, javabin, extensionsFilePath, classpath, stdout, stderr);
+    }
+
     String classpathString = String.join(File.pathSeparator, classpath);
     int limit = wrapperArgs.classpathLimit != null ? wrapperArgs.classpathLimit : classpathLimit();
     boolean useClasspathJar = classpathString.length() > limit;
 
     // Allow slow startup to be configured without changing per-test JVM flags.
-    long startupTimeoutSeconds = Long.parseLong(
-        System.getProperty("bazel.persistent.startup_timeout_seconds", "30"));
+    long startupTimeoutSeconds =
+        Long.parseLong(System.getProperty("bazel.persistent.startup_timeout_seconds", "30"));
     if (startupTimeoutSeconds <= 0 || startupTimeoutSeconds > Long.MAX_VALUE / 1000) {
-      throw new IllegalArgumentException("bazel.persistent.startup_timeout_seconds must be positive");
+      throw new IllegalArgumentException(
+          "bazel.persistent.startup_timeout_seconds must be positive");
     }
     long startupTimeoutMillis = startupTimeoutSeconds * 1000;
     if (wrapperArgs.jvmDebugPort != null && "y".equals(wrapperArgs.jvmDebugSuspend)) {
       startupTimeoutMillis = 0; // Wait for debugger attachment, but still detect child exit.
     }
 
-    long shutdownTimeoutSeconds = Long.parseLong(
-        System.getProperty("bazel.persistent.shutdown_timeout_seconds", "30"));
+    long shutdownTimeoutSeconds =
+        Long.parseLong(System.getProperty("bazel.persistent.shutdown_timeout_seconds", "30"));
     if (shutdownTimeoutSeconds <= 0 || shutdownTimeoutSeconds > Long.MAX_VALUE / 1_000_000_000) {
-      throw new IllegalArgumentException("bazel.persistent.shutdown_timeout_seconds must be positive"
-          + " and representable in nanoseconds");
+      throw new IllegalArgumentException(
+          "bazel.persistent.shutdown_timeout_seconds must be positive"
+              + " and representable in nanoseconds");
     }
     long shutdownTimeoutNanos = TimeUnit.SECONDS.toNanos(shutdownTimeoutSeconds);
 
@@ -213,18 +242,7 @@ public final class PersistentTestRunner {
       Config.ClasspathEntry entry = config.classpath.get(i);
       tracked.add(
           new JvmProcess.ClasspathEntry(
-              entry.label,
-              entry.path,
-              sha256(classpath.get(i + config.driverClasspath.size()))));
-    }
-
-    JvmProcess reusable = pool.tryReuse(tracked);
-    if (reusable != null) {
-      // TODO: dispatch this test into the reusable JVM instead of spawning a fresh one.
-      // Requires an IPC channel to the driver process. For now, log, release it, and fall through.
-      stderr.println(
-          "[persistent-test-runner] would reuse an idle JVM with matching classpath (dispatch not yet implemented)");
-      pool.release(reusable);
+              entry.label, entry.path, sha256(classpath.get(i + config.driverClasspath.size()))));
     }
 
     List<String> mergedJvmFlags = new ArrayList<>(config.jvmFlags);
@@ -238,12 +256,14 @@ public final class PersistentTestRunner {
     pb.environment().put("BAZEL_PERSISTENT_IPC_C2J", c2j.toString());
     pb.environment().put("BAZEL_PERSISTENT_IPC_J2C", j2c.toString());
     pb.environment().put("JACOCO_IS_JAR_WRAPPED", useClasspathJar ? "1" : "0");
-    pb.environment().put("CLASSPATH_JAR", useClasspathJar ? classpathJar.getFileName().toString() : "");
+    pb.environment()
+        .put("CLASSPATH_JAR", useClasspathJar ? classpathJar.getFileName().toString() : "");
     if (config.coverageMainClass != null) {
       pb.environment().put("JACOCO_MAIN_CLASS", config.coverageMainClass);
       String javaRunfiles = environment.get("JAVA_RUNFILES");
       if (javaRunfiles != null) {
-        pb.environment().put("JACOCO_JAVA_RUNFILES_ROOT", javaRunfiles + "/" + config.workspacePrefix);
+        pb.environment()
+            .put("JACOCO_JAVA_RUNFILES_ROOT", javaRunfiles + "/" + config.workspacePrefix);
       }
     }
     ensureUtf8Locale(pb);
@@ -258,9 +278,14 @@ public final class PersistentTestRunner {
 
     WireChannel channel;
     try {
-      long connectionTimeout = startupTimeoutMillis == 0 ? 0 : Math.max(1,
-          startupTimeoutMillis - java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(
-              System.nanoTime() - startupStarted));
+      long connectionTimeout =
+          startupTimeoutMillis == 0
+              ? 0
+              : Math.max(
+                  1,
+                  startupTimeoutMillis
+                      - java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(
+                          System.nanoTime() - startupStarted));
       channel = FifoConnection.open(process, c2j, j2c, connectionTimeout);
     } catch (IOException | InterruptedException e) {
       process.destroyForcibly();
@@ -283,8 +308,8 @@ public final class PersistentTestRunner {
       if (e instanceof InterruptedException) {
         throw (InterruptedException) e;
       }
-      throw new IOException("Child startup failed: " + e.getMessage()
-          + "\nCommand: " + String.join(" ", command), e);
+      throw new IOException(
+          "Child startup failed: " + e.getMessage() + "\nCommand: " + String.join(" ", command), e);
     }
 
     try {
@@ -292,24 +317,29 @@ public final class PersistentTestRunner {
       // TestFinished and wire EOF both start shutdown. Neither proves that the
       // process has exited: System.exit can still be running user shutdown hooks.
       long shutdownStarted = System.nanoTime();
-      if (!process.waitFor(remainingNanos(shutdownStarted, shutdownTimeoutNanos),
-          TimeUnit.NANOSECONDS)
+      if (!process.waitFor(
+              remainingNanos(shutdownStarted, shutdownTimeoutNanos), TimeUnit.NANOSECONDS)
           || !joinWithin(stdoutDrain, shutdownStarted, shutdownTimeoutNanos)
           || !joinWithin(stderrDrain, shutdownStarted, shutdownTimeoutNanos)) {
-        throw new IOException("Child shutdown timed out after " + shutdownTimeoutSeconds
-            + " seconds waiting for process exit and output draining");
+        throw new IOException(
+            "Child shutdown timed out after "
+                + shutdownTimeoutSeconds
+                + " seconds waiting for process exit and output draining");
       }
       return reportedExitCode == null ? process.exitValue() : reportedExitCode;
     } finally {
       // Also bound cleanup on protocol errors, interruption, and inherited pipes.
       // Closing a buffered wire stream can wait on its blocked reader's monitor.
       process.destroyForcibly();
-      Thread closeChannel = new Thread(() -> {
-        try {
-          channel.close();
-        } catch (IOException ignored) {
-        }
-      }, "persistent-test-runner-wire-close");
+      Thread closeChannel =
+          new Thread(
+              () -> {
+                try {
+                  channel.close();
+                } catch (IOException ignored) {
+                }
+              },
+              "persistent-test-runner-wire-close");
       closeChannel.setDaemon(true);
       closeChannel.start();
       long cleanupStarted = System.nanoTime();
@@ -330,6 +360,125 @@ public final class PersistentTestRunner {
         Files.deleteIfExists(classpathJar);
       }
     }
+  }
+
+  private int runReusable(
+      Config config,
+      WrapperArgs wrapperArgs,
+      Map<String, String> environment,
+      String javabin,
+      String extensionsFile,
+      List<String> classpath,
+      PrintStream stdout,
+      PrintStream stderr)
+      throws Exception {
+    List<String> flags = new ArrayList<>(config.jvmFlags);
+    flags.addAll(wrapperArgs.jvmFlagsCmdline);
+    Map<String, String> properties = new java.util.LinkedHashMap<>();
+    flags.removeIf(
+        flag -> {
+          if (flag.startsWith("-Dbazel.test_suite=")) {
+            properties.put("bazel.test_suite", flag.substring("-Dbazel.test_suite=".length()));
+            return true;
+          }
+          return false;
+        });
+    if (!properties.containsKey("bazel.test_suite")) {
+      throw new IOException("Reusable JUnit request is missing -Dbazel.test_suite");
+    }
+    if (environment.containsKey("TEST_TMPDIR")) {
+      properties.put("java.io.tmpdir", environment.get("TEST_TMPDIR"));
+    }
+    List<String> driverClasspath = classpath.subList(0, config.driverClasspath.size());
+    List<String> testClasspath = classpath.subList(config.driverClasspath.size(), classpath.size());
+    StringBuilder key = new StringBuilder(Paths.get(javabin).toRealPath().toString());
+    for (String flag : flags) {
+      key.append('\n').append(flag);
+    }
+    for (String path : driverClasspath) {
+      key.append('\n').append(path).append('=').append(ReusableJvm.digest(Paths.get(path)));
+    }
+    if (extensionsFile != null) {
+      key.append("\nextensions=").append(ReusableJvm.digest(Paths.get(extensionsFile)));
+    }
+    for (String name :
+        java.util.Arrays.asList("JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS", "JDK_JAVA_OPTIONS")) {
+      key.append('\n').append(name).append('=').append(environment.get(name));
+    }
+    List<JvmProcess.ClasspathEntry> requested = new ArrayList<>();
+    for (int i = 0; i < config.classpath.size(); i++) {
+      String path = testClasspath.get(i);
+      requested.add(
+          new JvmProcess.ClasspathEntry(
+              config.classpath.get(i).label, path, ReusableJvm.digest(Paths.get(path))));
+    }
+    ReusableJvm child = null;
+    for (java.util.Iterator<ReusableJvm> iterator = reusableChildren.iterator();
+        iterator.hasNext(); ) {
+      ReusableJvm candidate = iterator.next();
+      if (candidate.compatible(key.toString(), requested)) {
+        child = candidate;
+        stderr.println("[persistent-test-runner] reusing warm child JVM");
+        break;
+      }
+      if (candidate.startupKey.equals(key.toString()) || !candidate.process.isAlive()) {
+        iterator.remove();
+        candidate.close();
+      }
+    }
+    if (child == null) {
+      if (reusableChildren.size() >= MAX_JVMS) {
+        reusableChildren.remove(0).close();
+      }
+      List<String> command = new ArrayList<>();
+      command.add(javabin);
+      command.addAll(flags);
+      // Java 8 has no module boundary; newer runtimes require an explicit open.
+      Path release = Paths.get(javabin).toRealPath().getParent().getParent().resolve("release");
+      if (!Files.exists(release) && release.getParent().getFileName().toString().equals("jre")) {
+        release = release.getParent().getParent().resolve("release");
+      }
+      String runtime =
+          new String(Files.readAllBytes(release), java.nio.charset.StandardCharsets.UTF_8);
+      if (!runtime.contains("JAVA_VERSION=\"1.8.")) {
+        command.add("--add-opens=java.base/java.util=ALL-UNNAMED");
+      }
+      command.add("-Dbazel.persistent.reusable_child=true");
+      if (extensionsFile != null) {
+        command.add("-Dbazel.persistent.extensions_file=" + extensionsFile);
+      }
+      command.add("-classpath");
+      command.add(String.join(File.pathSeparator, driverClasspath));
+      command.add(config.driverMain);
+      long timeout =
+          Long.parseLong(System.getProperty("bazel.persistent.startup_timeout_seconds", "30"));
+      if (timeout <= 0 || timeout > Long.MAX_VALUE / 1_000_000_000) {
+        throw new IllegalArgumentException("Invalid reusable child startup timeout");
+      }
+      child =
+          ReusableJvm.start(
+              key.toString(), command, environment, store, stdout, stderr, timeout * 1000);
+      reusableChildren.add(child);
+      stderr.println("[persistent-test-runner] spawned reusable child JVM");
+    }
+    try {
+      return child.execute(
+          new TestStart(testClasspath, wrapperArgs.programArgs, environment, properties),
+          requested,
+          stdout,
+          stderr);
+    } catch (Exception e) {
+      reusableChildren.remove(child);
+      child.close();
+      throw e;
+    }
+  }
+
+  private synchronized void closeChildren() {
+    for (ReusableJvm child : reusableChildren) {
+      child.close();
+    }
+    reusableChildren.clear();
   }
 
   private static long remainingNanos(long started, long budget) {
@@ -363,8 +512,9 @@ public final class PersistentTestRunner {
                     return;
                   }
                   if (!ready.isDone() && !(msg instanceof SessionReady)) {
-                    throw new IOException("Expected SessionReady during child startup, got "
-                        + msg.getClass().getSimpleName());
+                    throw new IOException(
+                        "Expected SessionReady during child startup, got "
+                            + msg.getClass().getSimpleName());
                   }
                   handle(channel, msg, finished);
                   if (msg instanceof SessionReady) {
@@ -387,18 +537,25 @@ public final class PersistentTestRunner {
     try {
       while (!ready.isDone()) {
         if (!process.isAlive()) {
-          throw new IOException("Child exited with status " + process.exitValue()
-              + " before SessionReady; see child stderr above");
+          throw new IOException(
+              "Child exited with status "
+                  + process.exitValue()
+                  + " before SessionReady; see child stderr above");
         }
-        long remaining = startupTimeoutMillis == 0 ? Long.MAX_VALUE
-            : java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(startupTimeoutMillis)
-                - (System.nanoTime() - startupStarted);
+        long remaining =
+            startupTimeoutMillis == 0
+                ? Long.MAX_VALUE
+                : java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(startupTimeoutMillis)
+                    - (System.nanoTime() - startupStarted);
         if (remaining <= 0) {
-          throw new IOException("Child startup timed out after " + startupTimeoutMillis
-              + " ms waiting for SessionReady (including FIFO connection)");
+          throw new IOException(
+              "Child startup timed out after "
+                  + startupTimeoutMillis
+                  + " ms waiting for SessionReady (including FIFO connection)");
         }
         try {
-          ready.get(Math.min(remaining, java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(50)),
+          ready.get(
+              Math.min(remaining, java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(50)),
               java.util.concurrent.TimeUnit.NANOSECONDS);
         } catch (java.util.concurrent.TimeoutException e) {
           // Recheck process exit and the shared startup deadline.
@@ -564,7 +721,8 @@ public final class PersistentTestRunner {
       if (isWindows()) {
         cp.append("file:/").append(p.replace('\\', '/'));
       } else {
-        cp.append("file:").append(p.startsWith("/") ? p : Paths.get("").toAbsolutePath().resolve(p));
+        cp.append("file:")
+            .append(p.startsWith("/") ? p : Paths.get("").toAbsolutePath().resolve(p));
       }
     }
     Manifest manifest = new Manifest();
@@ -572,8 +730,7 @@ public final class PersistentTestRunner {
     main.put(Attributes.Name.MANIFEST_VERSION, "1.0");
     main.putValue("Created-By", "Bazel");
     main.putValue("Class-Path", cp.toString());
-    try (JarOutputStream out = new JarOutputStream(Files.newOutputStream(jar), manifest)) {
-    }
+    try (JarOutputStream out = new JarOutputStream(Files.newOutputStream(jar), manifest)) {}
     return jar;
   }
 }

@@ -34,27 +34,30 @@ final class FifoConnection {
   static WireChannel open(Process child, Path c2j, Path j2c, long timeoutMillis)
       throws IOException, InterruptedException {
     CompletableFuture<WireChannel> connected = new CompletableFuture<>();
-    Thread opener = new Thread(() -> {
-      OutputStream out = null;
-      InputStream in = null;
-      try {
-        // Mirror the child: coordinator opens its write side, then its read side.
-        out = Files.newOutputStream(c2j);
-        in = Files.newInputStream(j2c);
-        WireChannel channel = new WireChannel(in, out);
-        if (connected.complete(channel)) {
-          out = null;
-          in = null;
-        } else {
-          channel.close();
-        }
-      } catch (IOException e) {
-        connected.completeExceptionally(e);
-      } finally {
-        closeQuietly(in);
-        closeQuietly(out);
-      }
-    }, "persistent-test-runner-fifo-open");
+    Thread opener =
+        new Thread(
+            () -> {
+              OutputStream out = null;
+              InputStream in = null;
+              try {
+                // Mirror the child: coordinator opens its write side, then its read side.
+                out = new java.io.FileOutputStream(c2j.toFile());
+                in = new java.io.FileInputStream(j2c.toFile());
+                WireChannel channel = new WireChannel(in, out);
+                if (connected.complete(channel)) {
+                  out = null;
+                  in = null;
+                } else {
+                  channel.close();
+                }
+              } catch (IOException e) {
+                connected.completeExceptionally(e);
+              } finally {
+                closeQuietly(in);
+                closeQuietly(out);
+              }
+            },
+            "persistent-test-runner-fifo-open");
     opener.setDaemon(true);
     opener.start();
     long started = System.nanoTime();
@@ -62,18 +65,23 @@ final class FifoConnection {
     try {
       while (true) {
         if (!child.isAlive()) {
-          throw new IOException("Child exited with status " + child.exitValue()
-              + " before FIFO connection; see child stderr above");
+          throw new IOException(
+              "Child exited with status "
+                  + child.exitValue()
+                  + " before FIFO connection; see child stderr above");
         }
-        long remaining = timeoutMillis == 0 ? Long.MAX_VALUE
-            : TimeUnit.MILLISECONDS.toNanos(timeoutMillis) - (System.nanoTime() - started);
+        long remaining =
+            timeoutMillis == 0
+                ? Long.MAX_VALUE
+                : TimeUnit.MILLISECONDS.toNanos(timeoutMillis) - (System.nanoTime() - started);
         if (remaining <= 0) {
-          throw new IOException("Timed out after " + timeoutMillis
-              + " ms waiting for child FIFO connection");
+          throw new IOException(
+              "Timed out after " + timeoutMillis + " ms waiting for child FIFO connection");
         }
         try {
-          WireChannel channel = connected.get(
-              Math.min(remaining, TimeUnit.MILLISECONDS.toNanos(50)), TimeUnit.NANOSECONDS);
+          WireChannel channel =
+              connected.get(
+                  Math.min(remaining, TimeUnit.MILLISECONDS.toNanos(50)), TimeUnit.NANOSECONDS);
           success = true;
           return channel;
         } catch (TimeoutException e) {
@@ -90,10 +98,10 @@ final class FifoConnection {
         // Interrupting a native FIFO open is insufficient. O_RDWR on a FIFO opens
         // immediately on supported POSIX systems and supplies both missing peers.
         // Keep both peers open until the opener has finished, then close everything.
-        try (SeekableByteChannel writePeer = Files.newByteChannel(c2j,
-                 StandardOpenOption.READ, StandardOpenOption.WRITE);
-             SeekableByteChannel readPeer = Files.newByteChannel(j2c,
-                 StandardOpenOption.READ, StandardOpenOption.WRITE)) {
+        try (SeekableByteChannel writePeer =
+                Files.newByteChannel(c2j, StandardOpenOption.READ, StandardOpenOption.WRITE);
+            SeekableByteChannel readPeer =
+                Files.newByteChannel(j2c, StandardOpenOption.READ, StandardOpenOption.WRITE)) {
           opener.join(1000);
         }
         // The opener may have completed just before cancellation.

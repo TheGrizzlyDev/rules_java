@@ -24,6 +24,7 @@ java_binary(
         "JvmPool.java",
         "JvmProcess.java",
         "PersistentTestRunner.java",
+        "ReusableJvm.java",
         "TestEnvironment.java",
         "WrapperArgs.java",
     ],
@@ -46,7 +47,7 @@ java_library(
 
 java_library(
     name = "jvm_driver",
-    srcs = ["JvmDriver.java"],
+    srcs = ["JvmDriver.java", "ReusableTestDriver.java"],
     visibility = ["//visibility:public"],
     deps = [
         "//java/bazel/rules/test_runner/extension",

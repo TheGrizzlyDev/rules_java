@@ -58,25 +58,24 @@ public final class JvmDriver {
   private JvmDriver() {}
 
   public static void main(String[] args) throws Exception {
+    if (Boolean.getBoolean("bazel.persistent.reusable_child")) {
+      ReusableTestDriver.run();
+      return;
+    }
     String testMain = System.getProperty(TEST_MAIN_PROP);
     String c2jPath = System.getenv(IPC_C2J_ENV);
     String j2cPath = System.getenv(IPC_J2C_ENV);
     if (testMain == null || c2jPath == null || j2cPath == null) {
       throw new IllegalStateException(
-          "JvmDriver requires -D"
-              + TEST_MAIN_PROP
-              + " and env "
-              + IPC_C2J_ENV
-              + "/"
-              + IPC_J2C_ENV);
+          "JvmDriver requires -D" + TEST_MAIN_PROP + " and env " + IPC_C2J_ENV + "/" + IPC_J2C_ENV);
     }
 
     // Order matters: open read side first (blocks until coordinator opens the matching write
     // side), then the write side (blocks until coordinator opens the matching read side).
     // Mirror of the coordinator's ordering. Explicit locals to avoid Java's arg-evaluation-
     // order pitfall.
-    java.io.InputStream childRead = Files.newInputStream(Paths.get(c2jPath));
-    java.io.OutputStream childWrite = Files.newOutputStream(Paths.get(j2cPath));
+    java.io.InputStream childRead = new java.io.FileInputStream(c2jPath);
+    java.io.OutputStream childWrite = new java.io.FileOutputStream(j2cPath);
     WireChannel channel = new WireChannel(childRead, childWrite);
 
     Message hello = channel.read();
@@ -104,6 +103,7 @@ public final class JvmDriver {
                 while (true) {
                   Message msg = channel.read();
                   if (msg == null) {
+                    store.fail(new IOException("Coordinator closed the wire"));
                     workerShutdownReceived.complete(null);
                     return;
                   }
@@ -114,8 +114,7 @@ public final class JvmDriver {
                   store.dispatch(msg);
                 }
               } catch (IOException e) {
-                // Coordinator closed the wire or sent garbage. Log to stderr; blocking store
-                // calls will surface an error via their pending futures.
+                store.fail(e);
                 e.printStackTrace();
                 workerShutdownReceived.complete(null);
               }
@@ -211,7 +210,8 @@ public final class JvmDriver {
     void invoke(Extension ext);
   }
 
-  private static final class WireBackedStore implements Store {
+  static final class WireBackedStore implements Store {
+    private IOException failure;
     private final WireChannel channel;
     private final AtomicInteger nextRequestId = new AtomicInteger(1);
     private final ConcurrentMap<Integer, CompletableFuture<Optional<StoreValue>>> pendingGets =
@@ -279,27 +279,53 @@ public final class JvmDriver {
     private Optional<StoreValue> rawGet(String key) {
       int id = nextRequestId.getAndIncrement();
       CompletableFuture<Optional<StoreValue>> f = new CompletableFuture<>();
-      pendingGets.put(id, f);
+      synchronized (this) {
+        checkOpen();
+        pendingGets.put(id, f);
+      }
       try {
         channel.send(new StoreGetRequest(id, key));
         return f.join();
       } catch (IOException e) {
-        pendingGets.remove(id);
+        fail(e);
         throw new RuntimeException("Store.get failed", e);
+      } finally {
+        pendingGets.remove(id);
       }
     }
 
     private void typedSet(String key, StoreValue value) {
       int id = nextRequestId.getAndIncrement();
       CompletableFuture<Void> f = new CompletableFuture<>();
-      pendingSets.put(id, f);
+      synchronized (this) {
+        checkOpen();
+        pendingSets.put(id, f);
+      }
       try {
         channel.send(new StoreSetRequest(id, key, value));
         f.join();
       } catch (IOException e) {
-        pendingSets.remove(id);
+        fail(e);
         throw new RuntimeException("Store.set failed", e);
+      } finally {
+        pendingSets.remove(id);
       }
+    }
+
+    private void checkOpen() {
+      if (failure != null) {
+        throw new IllegalStateException("Coordinator store connection is closed", failure);
+      }
+    }
+
+    synchronized void fail(IOException cause) {
+      if (failure == null) {
+        failure = cause;
+      }
+      pendingGets.values().forEach(f -> f.completeExceptionally(failure));
+      pendingSets.values().forEach(f -> f.completeExceptionally(failure));
+      pendingGets.clear();
+      pendingSets.clear();
     }
 
     void dispatch(Message msg) {

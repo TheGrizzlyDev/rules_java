@@ -28,6 +28,8 @@ java_library(
         "StoreSetRequest.java",
         "StoreValue.java",
         "TestFinished.java",
+        "TestOutput.java",
+        "TestStart.java",
         "WireChannel.java",
         "WorkerShutdown.java",
         "WorkerStart.java",

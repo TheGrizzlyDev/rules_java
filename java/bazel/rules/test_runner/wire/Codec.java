@@ -23,8 +23,8 @@ import java.nio.charset.StandardCharsets;
 /**
  * Hand-rolled binary codec for the coordinator ↔ child JVM wire.
  *
- * <p>Frame format: 1-byte type tag, varint payload length, payload bytes. Within payloads: ints
- * are varint-encoded, strings are varint UTF-8 length + bytes, booleans are one byte.
+ * <p>Frame format: 1-byte type tag, varint payload length, payload bytes. Within payloads: ints are
+ * varint-encoded, strings are varint UTF-8 length + bytes, booleans are one byte.
  *
  * <p>Both ends agree on the schema in-tree; unknown tags on read are a hard error.
  */
@@ -40,11 +40,13 @@ public final class Codec {
     STORE_SET_ACK(3),
     WORKER_START(4),
     WORKER_SHUTDOWN(5),
+    TEST_START(6),
     // Child → coordinator.
     SESSION_READY(100),
     STORE_GET_REQUEST(101),
     STORE_SET_REQUEST(102),
-    TEST_FINISHED(200);
+    TEST_FINISHED(200),
+    TEST_OUTPUT(201);
 
     private final int code;
 
@@ -81,29 +83,59 @@ public final class Codec {
       writeFramed(out, Tag.WORKER_SHUTDOWN, p -> {});
     } else if (msg instanceof StoreGetRequest) {
       StoreGetRequest r = (StoreGetRequest) msg;
-      writeFramed(out, Tag.STORE_GET_REQUEST, p -> {
-        writeVarintInt(p, r.requestId());
-        writeString(p, r.key());
-      });
+      writeFramed(
+          out,
+          Tag.STORE_GET_REQUEST,
+          p -> {
+            writeVarintInt(p, r.requestId());
+            writeString(p, r.key());
+          });
     } else if (msg instanceof StoreGetResponse) {
       StoreGetResponse r = (StoreGetResponse) msg;
-      writeFramed(out, Tag.STORE_GET_RESPONSE, p -> {
-        writeVarintInt(p, r.requestId());
-        writeBool(p, r.present());
-        if (r.present()) {
-          writeStoreValue(p, r.value());
-        }
-      });
+      writeFramed(
+          out,
+          Tag.STORE_GET_RESPONSE,
+          p -> {
+            writeVarintInt(p, r.requestId());
+            writeBool(p, r.present());
+            if (r.present()) {
+              writeStoreValue(p, r.value());
+            }
+          });
     } else if (msg instanceof StoreSetRequest) {
       StoreSetRequest r = (StoreSetRequest) msg;
-      writeFramed(out, Tag.STORE_SET_REQUEST, p -> {
-        writeVarintInt(p, r.requestId());
-        writeString(p, r.key());
-        writeStoreValue(p, r.value());
-      });
+      writeFramed(
+          out,
+          Tag.STORE_SET_REQUEST,
+          p -> {
+            writeVarintInt(p, r.requestId());
+            writeString(p, r.key());
+            writeStoreValue(p, r.value());
+          });
     } else if (msg instanceof StoreSetAck) {
       StoreSetAck r = (StoreSetAck) msg;
       writeFramed(out, Tag.STORE_SET_ACK, p -> writeVarintInt(p, r.requestId()));
+    } else if (msg instanceof TestStart) {
+      TestStart r = (TestStart) msg;
+      writeFramed(
+          out,
+          Tag.TEST_START,
+          p -> {
+            writeStrings(p, r.classpath);
+            writeStrings(p, r.arguments);
+            writeMap(p, r.environment);
+            writeMap(p, r.properties);
+          });
+    } else if (msg instanceof TestOutput) {
+      TestOutput r = (TestOutput) msg;
+      writeFramed(
+          out,
+          Tag.TEST_OUTPUT,
+          p -> {
+            writeBool(p, r.stderr);
+            writeVarintInt(p, r.bytes.length);
+            p.write(r.bytes);
+          });
     } else if (msg instanceof TestFinished) {
       TestFinished r = (TestFinished) msg;
       writeFramed(out, Tag.TEST_FINISHED, p -> writeVarintInt(p, r.exitCode()));
@@ -138,20 +170,72 @@ public final class Codec {
         return WorkerShutdown.INSTANCE;
       case STORE_GET_REQUEST:
         return new StoreGetRequest(readVarintInt(p), readString(p));
-      case STORE_GET_RESPONSE: {
-        int reqId = readVarintInt(p);
-        boolean present = readBool(p);
-        StoreValue v = present ? readStoreValue(p) : null;
-        return new StoreGetResponse(reqId, present, v);
-      }
+      case STORE_GET_RESPONSE:
+        {
+          int reqId = readVarintInt(p);
+          boolean present = readBool(p);
+          StoreValue v = present ? readStoreValue(p) : null;
+          return new StoreGetResponse(reqId, present, v);
+        }
       case STORE_SET_REQUEST:
         return new StoreSetRequest(readVarintInt(p), readString(p), readStoreValue(p));
       case STORE_SET_ACK:
         return new StoreSetAck(readVarintInt(p));
+      case TEST_START:
+        return new TestStart(readStrings(p), readStrings(p), readMap(p), readMap(p));
+      case TEST_OUTPUT:
+        {
+          boolean stderr = readBool(p);
+          return new TestOutput(stderr, readFully(p, readCount(p)));
+        }
       case TEST_FINISHED:
         return new TestFinished(readVarintInt(p));
     }
     throw new AssertionError("unhandled tag " + tag);
+  }
+
+  private static void writeStrings(OutputStream out, java.util.List<String> values)
+      throws IOException {
+    writeVarintInt(out, values.size());
+    for (String value : values) {
+      writeString(out, value);
+    }
+  }
+
+  private static java.util.List<String> readStrings(InputStream in) throws IOException {
+    int count = readCount(in);
+    java.util.List<String> values = new java.util.ArrayList<>();
+    for (int i = 0; i < count; i++) {
+      values.add(readString(in));
+    }
+    return values;
+  }
+
+  private static void writeMap(OutputStream out, java.util.Map<String, String> values)
+      throws IOException {
+    writeVarintInt(out, values.size());
+    for (java.util.Map.Entry<String, String> value : values.entrySet()) {
+      writeString(out, value.getKey());
+      writeString(out, value.getValue());
+    }
+  }
+
+  private static java.util.Map<String, String> readMap(InputStream in) throws IOException {
+    int count = readCount(in);
+    java.util.Map<String, String> values = new java.util.LinkedHashMap<>();
+    for (int i = 0; i < count; i++) {
+      String key = readString(in);
+      values.put(key, readString(in));
+    }
+    return values;
+  }
+
+  private static int readCount(InputStream in) throws IOException {
+    int count = readVarintInt(in);
+    if (count < 0 || count > MAX_PAYLOAD) {
+      throw new IOException("collection length out of range: " + count);
+    }
+    return count;
   }
 
   // -------- framing primitives --------

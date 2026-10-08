@@ -28,6 +28,25 @@ import org.junit.runners.JUnit4;
 public final class CodecTest {
 
   @Test
+  public void repeatedTestRequestAndBinaryOutput_roundTrip() throws IOException {
+    TestStart start =
+        new TestStart(
+            java.util.Arrays.asList("jar with spaces", "λ.jar"),
+            java.util.Arrays.asList("", "@literal", "--"),
+            java.util.Collections.singletonMap("XML_OUTPUT_FILE", "/request/result.xml"),
+            java.util.Collections.singletonMap("bazel.test_suite", "example.Second"));
+    TestStart decoded = (TestStart) roundTrip(start);
+    assertThat(decoded.classpath).containsExactlyElementsIn(start.classpath).inOrder();
+    assertThat(decoded.arguments).containsExactlyElementsIn(start.arguments).inOrder();
+    assertThat(decoded.environment).isEqualTo(start.environment);
+    assertThat(decoded.properties).isEqualTo(start.properties);
+    byte[] bytes = {0, (byte) 0xff, (byte) 0xc3};
+    TestOutput output = (TestOutput) roundTrip(new TestOutput(true, bytes));
+    assertThat(output.stderr).isTrue();
+    assertThat(output.bytes).isEqualTo(bytes);
+  }
+
+  @Test
   public void sessionStart_roundTrip() throws IOException {
     assertThat(roundTrip(SessionStart.INSTANCE)).isSameInstanceAs(SessionStart.INSTANCE);
   }
@@ -125,8 +144,7 @@ public final class CodecTest {
 
   @Test
   public void unicodeStrings_roundTrip() throws IOException {
-    StoreSetRequest original =
-        new StoreSetRequest(1, "key/日本語", StoreValue.ofString("value/λ/🙂"));
+    StoreSetRequest original = new StoreSetRequest(1, "key/日本語", StoreValue.ofString("value/λ/🙂"));
     StoreSetRequest decoded = (StoreSetRequest) roundTrip(original);
     assertThat(decoded.key()).isEqualTo("key/日本語");
     assertThat(decoded.value().stringValue()).isEqualTo("value/λ/🙂");

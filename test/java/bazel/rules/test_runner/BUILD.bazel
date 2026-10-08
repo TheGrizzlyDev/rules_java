@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-load("//java:defs.bzl", "java_test")
+load("//java:defs.bzl", "java_library", "java_test")
 
 package(default_applicable_licenses = ["@rules_java//:license"])
 
@@ -193,5 +193,54 @@ java_test(
         "//java/bazel/rules/test_runner:jvm_driver",
         "//java/bazel/rules/test_runner:persistent_test_runner",
         "//java/bazel/rules/test_runner/wire",
+    ],
+)
+
+java_library(
+    name = "warm_fixtures",
+    testonly = True,
+    srcs = ["WarmFixtures.java"],
+    deps = ["@bazel_tools//tools/jdk:TestRunner"],
+)
+
+java_test(
+    name = "WarmReuseFirst",
+    size = "small",
+    env = {"TEST_WARM_MARKER": "first"},
+    test_class = "com.google.devtools.build.java.testrunner.WarmFixtures$First",
+    target_compatible_with = ["@platforms//os:linux"],
+    runtime_deps = [":warm_fixtures"],
+)
+
+java_test(
+    name = "WarmReuseSecond",
+    size = "small",
+    env = {"TEST_WARM_MARKER": "second"},
+    test_class = "com.google.devtools.build.java.testrunner.WarmFixtures$Second",
+    target_compatible_with = ["@platforms//os:linux"],
+    runtime_deps = [":warm_fixtures"],
+)
+
+java_test(
+    name = "ChildReuseTest",
+    size = "small",
+    timeout = "short",
+    srcs = ["ChildReuseTest.java"],
+    main_class = "com.google.devtools.build.java.testrunner.ChildReuseTest",
+    target_compatible_with = ["@platforms//os:linux"],
+    use_testrunner = False,
+    runtime_deps = [
+        ":warm_fixtures",
+        "//java/bazel/rules/test_runner:fifo_connection",
+        "//java/bazel/rules/test_runner/persistent_worker:persistent_worker_lib",
+        "//java/runfiles",
+    ],
+    deps = [
+        "//java/bazel/rules/test_runner:jvm_driver",
+        "//java/bazel/rules/test_runner:persistent_test_runner",
+        "//java/bazel/rules/test_runner/extension",
+        "//java/bazel/rules/test_runner/wire",
+        "//java/bazel/rules/test_runner/persistent_worker:worker_protocol_java_proto",
+        "@com_google_protobuf//java/core",
     ],
 )

@@ -416,8 +416,11 @@ def _test_runner_config_args(
     config_args.add("com.google.devtools.build.java.testrunner.JvmDriver", format = "driver_main=%s")
     if coverage_main_class:
         config_args.add(coverage_main_class, format = "coverage_main_class=%s")
+    # These flags are shell-escaped for the ordinary launcher. ProcessBuilder
+    # consumes argv directly, so store the same tokenized values as Windows.
     for flag in jvm_flags:
-        config_args.add(flag, format = "jvm_flag=%s")
+        for token in ctx.tokenize(flag):
+            config_args.add(token, format = "jvm_flag=%s")
     config_args.add_all(
         classpath,
         map_each = lambda f: [

@@ -6,6 +6,9 @@ Java Rules for Bazel https://bazel.build.
 
 **Documentation**
 
+See [persistent Java test workers](java/bazel/rules/test_runner/README.md) for the
+reuse policy and implementation milestones.
+
 For a quickstart tutorial, see https://bazel.build/start/java
 
 The fastest way to try this in an empty project is to click the green "Use this template" button on https://github.com/bazel-starters/java.
