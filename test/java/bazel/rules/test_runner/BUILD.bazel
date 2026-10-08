@@ -126,3 +126,28 @@ java_test(
         "//java/bazel/rules/test_runner/persistent_worker:worker_protocol_java_proto",
     ],
 )
+
+java_test(
+    name = "NativeArgumentsTest",
+    size = "small",
+    timeout = "short",
+    srcs = ["NativeArgumentsTest.java"],
+    # The args attribute uses shell tokenization before dispatch.
+    args = [
+        "--jvm_flag=-Dpersistent.argument.marker=rule",
+        "'rule value'",
+        "''",
+        "\"'quoted'\"",
+        "'double\"quote'",
+        "'back\\slash'",
+        "@missing-file",
+        "@@literal",
+        "--config=program-option",
+        "--persistent_worker",
+        "--",
+        "last",
+    ],
+    main_class = "com.google.devtools.build.java.testrunner.NativeArgumentsTest",
+    target_compatible_with = ["@platforms//os:linux"],
+    use_testrunner = False,
+)
