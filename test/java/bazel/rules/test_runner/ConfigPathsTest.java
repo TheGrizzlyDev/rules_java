@@ -30,7 +30,7 @@ import java.util.stream.Stream;
 /** Launches a real driver with paths rooted outside the coordinator's cwd/runfiles. */
 public final class ConfigPathsTest {
   public static void main(String[] args) throws Exception {
-    Path root = Files.createTempDirectory("config-paths-test-");
+    Path root = Files.createTempDirectory("config-paths-test-").toAbsolutePath();
     try {
       Path file = root.resolve("bazel-out/config/test.pb");
       Files.createDirectories(file.getParent());

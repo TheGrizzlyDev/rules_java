@@ -15,6 +15,7 @@ package com.google.devtools.build.java.testrunner.persistent_worker;
 
 import java.io.PrintStream;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Business logic for a single work unit. Implementations must be stateless across calls: the same
@@ -25,11 +26,13 @@ public interface WorkHandler {
    * Processes one unit of work.
    *
    * @param args post-argfile-expansion arguments (equivalent to argv for a one-shot invocation).
+   * @param environment immutable base environment overlaid with this request's variables.
    * @param stdout captures user-facing stdout for this unit; contents surface in {@code
    *     WorkResponse.output}.
    * @param stderr captures user-facing stderr for this unit; contents also surface in {@code
    *     WorkResponse.output}.
    * @return the exit code for this unit (0 on success).
    */
-  int handle(List<String> args, PrintStream stdout, PrintStream stderr) throws Exception;
+  int handle(List<String> args, Map<String, String> environment, PrintStream stdout, PrintStream stderr)
+      throws Exception;
 }

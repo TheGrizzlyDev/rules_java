@@ -36,7 +36,8 @@ public final class ScanJvmTestRunnerExtensions {
   private ScanJvmTestRunnerExtensions() {}
 
   public static void main(String[] args) throws Exception {
-    PersistentWorker.run(args, ScanJvmTestRunnerExtensions::scan);
+    PersistentWorker.run(args, (arguments, environment, stdout, stderr) ->
+        scan(arguments, stdout, stderr));
   }
 
   static int scan(List<String> args, PrintStream stdout, PrintStream stderr) throws IOException {

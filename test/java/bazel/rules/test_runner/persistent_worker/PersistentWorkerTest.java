@@ -48,7 +48,7 @@ public final class PersistentWorkerTest {
 
     List<List<String>> seen = new ArrayList<>();
     WorkHandler handler =
-        (args, stdout, stderr) -> {
+        (args, environment, stdout, stderr) -> {
           seen.add(new ArrayList<>(args));
           return 0;
         };
@@ -82,7 +82,7 @@ public final class PersistentWorkerTest {
 
     List<List<String>> seen = new ArrayList<>();
     WorkHandler handler =
-        (args, stdout, stderr) -> {
+        (args, environment, stdout, stderr) -> {
           seen.add(new ArrayList<>(args));
           return 0;
         };

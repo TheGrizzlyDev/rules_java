@@ -15,6 +15,7 @@ package com.google.devtools.build.java.testrunner;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /** Parses the wrapper-script-style flags that java_stub_template.txt understands. */
 final class WrapperArgs {
@@ -31,9 +32,13 @@ final class WrapperArgs {
   private WrapperArgs() {}
 
   static WrapperArgs parse(List<String> args) {
+    return parse(args, System.getenv());
+  }
+
+  static WrapperArgs parse(List<String> args, Map<String, String> environment) {
     WrapperArgs w = new WrapperArgs();
-    String defaultDebugPort = System.getenv("DEFAULT_JVM_DEBUG_PORT");
-    String defaultDebugSuspend = System.getenv("DEFAULT_JVM_DEBUG_SUSPEND");
+    String defaultDebugPort = environment.get("DEFAULT_JVM_DEBUG_PORT");
+    String defaultDebugSuspend = environment.get("DEFAULT_JVM_DEBUG_SUSPEND");
     if (defaultDebugSuspend != null) {
       w.jvmDebugSuspend = defaultDebugSuspend;
     }

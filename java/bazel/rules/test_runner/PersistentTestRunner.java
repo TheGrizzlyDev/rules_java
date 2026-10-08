@@ -38,6 +38,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -61,6 +62,11 @@ public final class PersistentTestRunner {
   }
 
   int handleRequest(List<String> args, PrintStream stdout, PrintStream stderr) throws Exception {
+    return handleRequest(args, System.getenv(), stdout, stderr);
+  }
+
+  int handleRequest(List<String> args, Map<String, String> environment,
+      PrintStream stdout, PrintStream stderr) throws Exception {
     Config config = null;
     List<String> forwarded = new ArrayList<>();
     boolean afterSeparator = false;
@@ -99,12 +105,17 @@ public final class PersistentTestRunner {
     if (config == null) {
       throw new IllegalStateException("--config=<path> is required");
     }
-    return run(config, forwarded, stdout, stderr);
+    return run(config, forwarded, environment, stdout, stderr);
   }
 
   int run(Config config, List<String> testArgs, PrintStream stdout, PrintStream stderr)
       throws Exception {
-    WrapperArgs wrapperArgs = WrapperArgs.parse(testArgs);
+    return run(config, testArgs, System.getenv(), stdout, stderr);
+  }
+
+  int run(Config config, List<String> testArgs, Map<String, String> environment,
+      PrintStream stdout, PrintStream stderr) throws Exception {
+    WrapperArgs wrapperArgs = WrapperArgs.parse(testArgs, environment);
     if (wrapperArgs.printJavabin || "--print_javabin".equals(config.mainClass)) {
       stdout.print(config.javabin);
       return 0;
@@ -162,7 +173,7 @@ public final class PersistentTestRunner {
               + ",address="
               + wrapperArgs.jvmDebugPort);
     }
-    String testTmpdir = System.getenv("TEST_TMPDIR");
+    String testTmpdir = environment.get("TEST_TMPDIR");
     if (testTmpdir != null && !testTmpdir.isEmpty() && Files.isDirectory(Paths.get(testTmpdir))) {
       command.add("-Djava.io.tmpdir=" + testTmpdir);
     }
@@ -211,13 +222,15 @@ public final class PersistentTestRunner {
     pool.reserveSlot();
     ProcessBuilder pb = new ProcessBuilder(command).redirectErrorStream(false);
     pb.redirectInput(ProcessBuilder.Redirect.INHERIT);
+    pb.environment().clear();
+    pb.environment().putAll(environment);
     pb.environment().put("BAZEL_PERSISTENT_IPC_C2J", c2j.toString());
     pb.environment().put("BAZEL_PERSISTENT_IPC_J2C", j2c.toString());
     pb.environment().put("JACOCO_IS_JAR_WRAPPED", useClasspathJar ? "1" : "0");
     pb.environment().put("CLASSPATH_JAR", useClasspathJar ? classpathJar.getFileName().toString() : "");
     if (config.coverageMainClass != null) {
       pb.environment().put("JACOCO_MAIN_CLASS", config.coverageMainClass);
-      String javaRunfiles = System.getenv("JAVA_RUNFILES");
+      String javaRunfiles = environment.get("JAVA_RUNFILES");
       if (javaRunfiles != null) {
         pb.environment().put("JACOCO_JAVA_RUNFILES_ROOT", javaRunfiles + "/" + config.workspacePrefix);
       }

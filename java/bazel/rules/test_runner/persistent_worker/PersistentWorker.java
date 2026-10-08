@@ -15,6 +15,8 @@ package com.google.devtools.build.java.testrunner.persistent_worker;
 
 import com.google.devtools.build.lib.worker.WorkerProtocol.WorkRequest;
 import com.google.devtools.build.lib.worker.WorkerProtocol.WorkResponse;
+import com.google.protobuf.Descriptors.FieldDescriptor;
+import com.google.protobuf.Message;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -26,7 +28,10 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Runs a {@link WorkHandler} either as a persistent worker (Bazel proto protocol on stdin/stdout)
@@ -57,7 +62,7 @@ public final class PersistentWorker {
       workerLoop(sticky, handler);
     } else {
       // One-shot: no capture, use real stdout/stderr.
-      System.exit(handler.handle(expandArgFiles(argv), System.out, System.err));
+      System.exit(handler.handle(expandArgFiles(argv), System.getenv(), System.out, System.err));
     }
   }
 
@@ -109,7 +114,8 @@ public final class PersistentWorker {
       List<String> merged = new ArrayList<>(stickyPrefix.size() + request.getArgumentsCount());
       merged.addAll(stickyPrefix);
       merged.addAll(request.getArgumentsList());
-      exitCode = handler.handle(expandArgFiles(merged), capturedStream, capturedStream);
+      exitCode = handler.handle(
+          expandArgFiles(merged), requestEnvironment(request), capturedStream, capturedStream);
     } catch (Throwable t) {
       StringWriter sw = new StringWriter();
       t.printStackTrace(new PrintWriter(sw));
@@ -128,6 +134,23 @@ public final class PersistentWorker {
         .setExitCode(exitCode)
         .setOutput(output)
         .build();
+  }
+
+  private static Map<String, String> requestEnvironment(WorkRequest request) {
+    Map<String, String> environment = new HashMap<>(System.getenv());
+    // Stock Bazel's worker proto has no environment field. Use the protobuf
+    // descriptor rather than a fork-only generated getter so ordinary tools
+    // still compile and execute with the stock protocol.
+    FieldDescriptor field = request.getDescriptorForType().findFieldByName("environment");
+    if (field != null) {
+      FieldDescriptor key = field.getMessageType().findFieldByName("key");
+      FieldDescriptor value = field.getMessageType().findFieldByName("value");
+      for (int i = 0; i < request.getRepeatedFieldCount(field); i++) {
+        Message entry = (Message) request.getRepeatedField(field, i);
+        environment.put((String) entry.getField(key), (String) entry.getField(value));
+      }
+    }
+    return Collections.unmodifiableMap(environment);
   }
 
   /** Splices any {@code @paramfile} arg into its lines, in place. Escapes {@code @@} → {@code @}. */
