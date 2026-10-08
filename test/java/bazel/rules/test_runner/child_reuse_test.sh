@@ -27,6 +27,9 @@ common=(
   --lockfile_mode=off --shell_executable=/bin/bash --action_env=PATH --host_action_env=PATH
   --test_timeout=60 --check_direct_dependencies=off
 )
+if [[ "${JVM_REUSE_MANIFEST_ONLY:-0}" == 1 ]]; then
+  common+=(--enable_runfiles=no)
+fi
 verify() {
   python3 - "$proof" "$1" "${@:2}" <<'PYPROOF'
 from pathlib import Path
@@ -69,6 +72,8 @@ if group == 'rules_java':
         match = re.search(r'WARM_STATE marker=\S+ token=(\S+) count=(\d+)', output)
         assert match, output
         states.append(match.groups())
+        context = re.search(r'RUNFILES_CONTEXT expected=(first|second) retained=(\d+)', output)
+        assert context, f'Missing per-target runfiles proof: {output}'
     assert len({token for token, _ in states}) == 1, states
     assert sorted(int(count) for _, count in states) == [1, 2], states
 summary = proof / 'summary.json'

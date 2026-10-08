@@ -23,7 +23,7 @@ esac
 
 if [[ -z "$JAVA_RUNFILES" ]]; then
   while true; do
-    if [[ -e "$self.runfiles" ]]; then
+    if [[ -e "$self.runfiles" || -f "$self.runfiles_manifest" ]]; then
       JAVA_RUNFILES="$self.runfiles"
       break
     fi
@@ -52,18 +52,42 @@ export TEST_SRCDIR="${TEST_SRCDIR:-$JAVA_RUNFILES}"
 export RUNFILES_DIR="${RUNFILES_DIR:-$JAVA_RUNFILES}"
 export RUNFILES_MANIFEST_FILE="${JAVA_RUNFILES}/MANIFEST"
 export RUNFILES_MANIFEST_ONLY=%runfiles_manifest_only%
+if [[ "$RUNFILES_MANIFEST_ONLY" == 1 && ! -f "$RUNFILES_MANIFEST_FILE" \
+    && -f "${JAVA_RUNFILES}_manifest" ]]; then
+  export RUNFILES_MANIFEST_FILE="${JAVA_RUNFILES}_manifest"
+fi
 export SELF_LOCATION="$self"
+
+# These two generated paths name declared files, so exact manifest entries
+# suffice. Preserve spaces in their physical paths when launching the runner.
+rlocation() {
+  if [[ "$1" == /* ]]; then
+    printf '%s\n' "$1"
+  elif [[ "$RUNFILES_MANIFEST_ONLY" != 1 ]]; then
+    printf '%s/%s\n' "$JAVA_RUNFILES" "$1"
+  else
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      if [[ "$line" == "$1 "* ]]; then
+        printf '%s\n' "${line#"$1 "}"
+        return
+      fi
+    done < "$RUNFILES_MANIFEST_FILE"
+    return 1
+  fi
+}
+
+config="$(rlocation "%config_rlocation%")" || exit 1
 
 if [[ $# -eq 1 && $1 == "--persistent_worker" ]]; then
   # PTR mode: keep the runner alive and let it read WorkRequests on stdin.
   # The sticky argv (--config=..., --) is prepended to every request's argv
   # inside the runner (see PersistentWorker.run).
-  exec %test_runner% \
-    --config="${JAVA_RUNFILES}/%config_rlocation%" \
+  exec "%test_runner%" \
+    --config="$config" \
     --persistent_worker \
     --
 fi
 
-exec %test_runner% \
-  --config="${JAVA_RUNFILES}/%config_rlocation%" \
+exec "%test_runner%" \
+  --config="$config" \
   -- "$@"

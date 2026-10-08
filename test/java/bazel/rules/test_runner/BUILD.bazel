@@ -200,13 +200,18 @@ java_library(
     name = "warm_fixtures",
     testonly = True,
     srcs = ["WarmFixtures.java"],
-    deps = ["@bazel_tools//tools/jdk:TestRunner"],
+    deps = ["//java/runfiles", "@bazel_tools//tools/jdk:TestRunner"],
 )
 
 java_test(
     name = "WarmReuseFirst",
     size = "small",
-    env = {"TEST_WARM_MARKER": "first"},
+    data = ["runfiles_first.txt"],
+    env = {
+        "TEST_WARM_MARKER": "first",
+        "TEST_RUNFILES_EXPECTED": "first",
+        "TEST_RUNFILES_DATA": "$(rlocationpath runfiles_first.txt)",
+    },
     test_class = "com.google.devtools.build.java.testrunner.WarmFixtures$First",
     target_compatible_with = ["@platforms//os:linux"],
     runtime_deps = [":warm_fixtures"],
@@ -215,7 +220,12 @@ java_test(
 java_test(
     name = "WarmReuseSecond",
     size = "small",
-    env = {"TEST_WARM_MARKER": "second"},
+    data = ["runfiles_second.txt"],
+    env = {
+        "TEST_WARM_MARKER": "second",
+        "TEST_RUNFILES_EXPECTED": "second",
+        "TEST_RUNFILES_DATA": "$(rlocationpath runfiles_second.txt)",
+    },
     test_class = "com.google.devtools.build.java.testrunner.WarmFixtures$Second",
     target_compatible_with = ["@platforms//os:linux"],
     runtime_deps = [":warm_fixtures"],

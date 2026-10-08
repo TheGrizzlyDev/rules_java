@@ -143,7 +143,7 @@ public final class PersistentTestRunner {
     environment =
         TestEnvironment.prepare(
             environment, config.execPaths ? config.execRoot : Paths.get("").toAbsolutePath());
-    Runfiles runfiles = config.execPaths ? null : Runfiles.preload().unmapped();
+    Runfiles runfiles = config.execPaths ? null : Runfiles.preload(environment).unmapped();
 
     String javabin = resolveConfigPath(config, runfiles, config.javabin);
     String extensionsFilePath = null;

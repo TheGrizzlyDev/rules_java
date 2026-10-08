@@ -338,9 +338,8 @@ def _create_test_runner_wrapper(
     additional_jars = depset(transitive = [dep[JavaInfo].transitive_runtime_jars for dep in additional_deps])
     extensions = _aggregate_extension_class_lists(ctx)
 
-    # The shell wrapper uses the test's runfiles. The native provider replaces
-    # that wrapper with the coordinator, whose runfiles belong to a different
-    # target. Give that route a config containing declared execution paths.
+    # The native provider invokes the shared coordinator directly. Give that
+    # route declared execution paths independent of the launcher's runfiles.
     configs = [(config, False)]
     exec_config = None
     if hasattr(testing, "PersistentTestInfo"):
@@ -472,10 +471,17 @@ def _aggregate_extension_class_lists(ctx):
     args = ctx.actions.args()
     args.add(output.path)
     args.add_all(class_lists)
+    aggregator_files = aggregator[DefaultInfo].files_to_run
+    # A manifest-only sandbox has no tree/MANIFEST symlink. Materialize the
+    # executable's sidecar manifest so its Java launcher can resolve runfiles.
+    aggregator_manifest = aggregator_files.runfiles_manifest
     ctx.actions.run(
-        executable = ctx.executable._extension_aggregator,
+        executable = aggregator_files,
         arguments = [args],
-        inputs = class_lists,
+        inputs = depset(
+            direct = [aggregator_manifest] if aggregator_manifest else [],
+            transitive = [class_lists],
+        ),
         outputs = [output],
         mnemonic = "AggregateTestRunnerExtensions",
     )

@@ -35,9 +35,9 @@ import java.util.Map;
 
 /**
  * Runs a {@link WorkHandler} either as a persistent worker (Bazel proto protocol on stdin/stdout)
- * or as a one-shot invocation. Detects worker mode by scanning argv for {@code
- * --persistent_worker} before {@code --}: if present, every other argv element becomes a sticky
- * prefix prepended to each {@link WorkRequest}'s arguments before dispatch to the handler.
+ * or as a one-shot invocation. Detects worker mode by scanning argv for {@code --persistent_worker}
+ * before {@code --}: if present, every other argv element becomes a sticky prefix prepended to each
+ * {@link WorkRequest}'s arguments before dispatch to the handler.
  *
  * <p>Singleplex only; multiplexing and cancellation are not yet implemented.
  */
@@ -120,8 +120,8 @@ public final class PersistentWorker {
       merged.addAll(request.getArgumentsList());
       // Bazel has already expanded request paramfiles. A request argument beginning
       // with @ is data, not another file for this worker to open.
-      exitCode = handler.handle(
-          merged, requestEnvironment(request), capturedStream, capturedStream);
+      exitCode =
+          handler.handle(merged, requestEnvironment(request), capturedStream, capturedStream);
     } catch (Throwable t) {
       StringWriter sw = new StringWriter();
       t.printStackTrace(new PrintWriter(sw));
@@ -149,12 +149,29 @@ public final class PersistentWorker {
     // still compile and execute with the stock protocol.
     FieldDescriptor field = request.getDescriptorForType().findFieldByName("environment");
     if (field != null) {
+      Map<String, String> supplied = new HashMap<>();
       FieldDescriptor key = field.getMessageType().findFieldByName("key");
       FieldDescriptor value = field.getMessageType().findFieldByName("value");
       for (int i = 0; i < request.getRepeatedFieldCount(field); i++) {
         Message entry = (Message) request.getRepeatedField(field, i);
-        environment.put((String) entry.getField(key), (String) entry.getField(value));
+        supplied.put((String) entry.getField(key), (String) entry.getField(value));
       }
+      if (supplied.containsKey("TEST_SRCDIR")) {
+        // A coordinator's shell launcher may have populated these from its
+        // own runfiles. A test request supplies its own context; do not inherit
+        // aliases or manifest mode from the launcher. Explicit request values
+        // still win, and test setup derives aliases omitted by the request.
+        for (String name :
+            java.util.Arrays.asList(
+                "RUNFILES_DIR",
+                "JAVA_RUNFILES",
+                "PYTHON_RUNFILES",
+                "RUNFILES_MANIFEST_FILE",
+                "RUNFILES_MANIFEST_ONLY")) {
+          environment.remove(name);
+        }
+      }
+      environment.putAll(supplied);
     }
     return Collections.unmodifiableMap(environment);
   }
@@ -177,7 +194,8 @@ public final class PersistentWorker {
       } else if (arg.startsWith("@@")) {
         out.add("@" + arg.substring(2));
       } else if (arg.startsWith("@")) {
-        for (String line : Files.readAllLines(Paths.get(arg.substring(1)), StandardCharsets.UTF_8)) {
+        for (String line :
+            Files.readAllLines(Paths.get(arg.substring(1)), StandardCharsets.UTF_8)) {
           out.add(line);
           if ("--".equals(line)) {
             afterSeparator = true;

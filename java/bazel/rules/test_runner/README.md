@@ -49,9 +49,37 @@ child to start. Failed or missing digest reads never count as a matching digest.
 Only runner-owned metadata changes between requests: suite, environment, temporary
 directory, and output destinations. Java's environment view is updated so existing
 JUnit code can read the current filter, shard, and XML path through `System.getenv`.
-Modular JDKs require opening `java.util` for that operation. Native-library `getenv`,
-native working-directory changes, and complete runfiles reconstruction remain
-separate work. General JVM state is retained.
+Modular JDKs require opening `java.util` for that operation. Native-library `getenv`
+and working-directory changes remain separate work. General JVM state is retained.
+
+## Per-request runfiles
+
+The Bazel fork preserves the original test target's runfiles tree when substituting
+the coordinator executable. Rule arguments and the action environment also remain
+attached to the original target. `TEST_BINARY` and temporary-directory identity
+also use the original executable, so distinct targets do not share the coordinator's
+temp directory. Request setup resolves runfiles against the execution root and
+supplies runfiles aliases and its manifest when omitted by the native request.
+Inherited aliases from the coordinator launcher are discarded
+when a request supplies its own `TEST_SRCDIR`; explicit request values win.
+
+Each warm dispatch sets runner-owned `bazel.runfiles.context` metadata. The Java
+runfiles library caches `Runfiles.preload()` within that execution, and reloads
+the current directory or manifest and repository mapping on the next dispatch.
+This also handles a manifest rewritten at the same pathname. Previously returned
+objects retain their original target's context, including objects deliberately
+kept in application statics. Tests should request a new runfiles object when they
+want the current execution's files. Older runfiles libraries that do not understand
+this context property still need their callers to use `Runfiles.preload(System.getenv())`.
+
+`ChildReuseTest` alternates directory and manifest contexts with different mappings
+for the same apparent `alias/data.txt` path. It verifies new lookups use the current
+target, old retained objects still resolve their original data, a rewritten manifest
+is reloaded, subprocesses resolve data using `Runfiles.getEnvVars()`, and the same
+child survives five dispatches before jar invalidation. The real warm fixture
+targets also read distinct `data` dependencies through the
+current runfiles object. Native-library working directories and native `getenv`
+remain separate work; this step supports explicit Java runfiles lookups.
 
 ## Reproducing child reuse
 
@@ -74,6 +102,11 @@ Logs, XML, and `summary.json` remain in the printed proof directory. Use
 an existing isolated Bazel output base. Keep the action PATH stable across build
 and test commands; `JVM_REUSE_ACTION_PATH` and `BAZEL_REUSE_ACTION_PATH` can select
 those environments when a platform adapter changes PATH between shells.
+Set `JVM_REUSE_MANIFEST_ONLY=1` to repeat the proof with symlink runfiles disabled.
+Java tool actions declare the aggregator's sidecar manifest as an input, and the
+Java launchers discover either `tree/MANIFEST` or the sibling `.runfiles_manifest`.
+The test wrapper resolves its config through that manifest before invoking the
+coordinator, including physical paths containing spaces.
 
 `ChildReuseTest` sends an ordered pass, fail, pass sequence through a real worker
 coordinator. It verifies the same child and warm static state survive the failed
@@ -106,5 +139,28 @@ the coordinator request stream terminated its pooled child. Bazel's direct
 The three repo proof targets also passed with persistent workers disabled and
 the standalone test strategy.
 
-These results establish actual child reuse under serial execution. Runfiles,
-concurrent execution, and a performance benchmark remain separate milestones.
+These initial results establish actual child reuse under serial execution. The
+follow-up runfiles milestone is recorded below.
+
+## Runfiles acceptance evidence
+
+The follow-up run on 2026-10-09 passed all seventeen worker and runfiles regression
+targets in both directory and manifest-only modes. The updated directory proof
+retained repo child PID `2106433` across three targets (23 passing cases) while
+the two fixture targets read distinct runfiles trees. Bazel's three collection
+targets retained child PID `2122466` across 22 passing cases. Copied logs, XML, and
+startup tokens are in `/tmp/rules-java-jvm-reuse.HUzKQD`.
+
+With symlink runfiles disabled, the same three repo targets shared child PID
+`2158442` and startup token `f609d7d2-8ddc-474a-a10a-f87e3d63b8e8`; artifacts are in
+`/tmp/rules-java-jvm-reuse.wrx4s8`. All three also passed under the standalone
+strategy with persistent workers disabled. Direct invocation of the test wrapper
+passed with only a sidecar manifest and spaces in the runner and config paths;
+`wrapper-spaces.log` and `wrapper.xml` preserve that check in the manifest proof
+directory.
+
+The ordered regression kept child PID `2104138` across five runfiles contexts,
+including a failed suite and a rewritten manifest, then started child PID
+`2104293` after a jar digest changed. This step validates explicit Java runfiles
+lookups and subprocess propagation. Native working directories, native `getenv`,
+concurrency, cancellation, and coverage remain later work.

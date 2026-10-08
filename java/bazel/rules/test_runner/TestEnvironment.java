@@ -29,19 +29,52 @@ final class TestEnvironment {
   static Map<String, String> prepare(Map<String, String> source, Path execRoot) throws IOException {
     Map<String, String> environment = new HashMap<>(source);
     environment.put("BAZEL_TEST", "1");
-    for (String name : Arrays.asList(
-        "TEST_TMPDIR", "TEST_SRCDIR", "RUNFILES_DIR", "JAVA_RUNFILES", "PYTHON_RUNFILES",
-        "RUNFILES_MANIFEST_FILE", "XML_OUTPUT_FILE", "TEST_SHARD_STATUS_FILE",
-        "TEST_PREMATURE_EXIT_FILE", "TEST_WARNINGS_OUTPUT_FILE", "TEST_LOGSPLITTER_OUTPUT_FILE",
-        "TEST_INFRASTRUCTURE_FAILURE_FILE", "TEST_UNUSED_RUNFILES_LOG_FILE",
-        "TEST_UNDECLARED_OUTPUTS_DIR", "TEST_UNDECLARED_OUTPUTS_ANNOTATIONS_DIR")) {
+    // test-setup.sh normally supplies these aliases and locates the manifest.
+    // Preserve the original target's runfiles directory, never the worker's.
+    String runfilesDir = environment.get("TEST_SRCDIR");
+    if (runfilesDir != null && !runfilesDir.isEmpty()) {
+      for (String name : Arrays.asList("RUNFILES_DIR", "JAVA_RUNFILES", "PYTHON_RUNFILES")) {
+        if (environment.get(name) == null || environment.get(name).isEmpty()) {
+          environment.put(name, runfilesDir);
+        }
+      }
+      String manifest = environment.get("RUNFILES_MANIFEST_FILE");
+      if (manifest == null || manifest.isEmpty()) {
+        Path inTree = execRoot.resolve(runfilesDir).resolve("MANIFEST");
+        Path sibling = execRoot.resolve(runfilesDir + "_manifest");
+        environment.put(
+            "RUNFILES_MANIFEST_FILE",
+            (!Files.isRegularFile(inTree) && Files.isRegularFile(sibling) ? sibling : inTree)
+                .toString());
+      }
+    }
+    for (String name :
+        Arrays.asList(
+            "TEST_TMPDIR",
+            "TEST_SRCDIR",
+            "RUNFILES_DIR",
+            "JAVA_RUNFILES",
+            "PYTHON_RUNFILES",
+            "RUNFILES_MANIFEST_FILE",
+            "XML_OUTPUT_FILE",
+            "TEST_SHARD_STATUS_FILE",
+            "TEST_PREMATURE_EXIT_FILE",
+            "TEST_WARNINGS_OUTPUT_FILE",
+            "TEST_LOGSPLITTER_OUTPUT_FILE",
+            "TEST_INFRASTRUCTURE_FAILURE_FILE",
+            "TEST_UNUSED_RUNFILES_LOG_FILE",
+            "TEST_UNDECLARED_OUTPUTS_DIR",
+            "TEST_UNDECLARED_OUTPUTS_ANNOTATIONS_DIR")) {
       String value = environment.get(name);
       if (value != null && !value.isEmpty()) {
         environment.put(name, execRoot.resolve(value).toAbsolutePath().normalize().toString());
       }
     }
-    for (String name : Arrays.asList(
-        "TEST_TMPDIR", "TEST_UNDECLARED_OUTPUTS_DIR", "TEST_UNDECLARED_OUTPUTS_ANNOTATIONS_DIR")) {
+    for (String name :
+        Arrays.asList(
+            "TEST_TMPDIR",
+            "TEST_UNDECLARED_OUTPUTS_DIR",
+            "TEST_UNDECLARED_OUTPUTS_ANNOTATIONS_DIR")) {
       String value = environment.get(name);
       if (value != null && !value.isEmpty()) {
         Files.createDirectories(Paths.get(value));

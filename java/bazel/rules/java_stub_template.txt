@@ -158,7 +158,7 @@ fi
 if [[ "$SINGLEJAR" != 1 || "%needs_runfiles%" == 1 ]]; then
   if [[ -z "$JAVA_RUNFILES" ]]; then
     while true; do
-      if [[ -e "$self.runfiles" ]]; then
+      if [[ -e "$self.runfiles" || -f "$self.runfiles_manifest" ]]; then
         JAVA_RUNFILES="$self.runfiles"
         break
       fi
@@ -195,6 +195,10 @@ fi
 export JAVA_RUNFILES
 export RUNFILES_MANIFEST_FILE="${JAVA_RUNFILES}/MANIFEST"
 export RUNFILES_MANIFEST_ONLY=%runfiles_manifest_only%
+if [[ "$RUNFILES_MANIFEST_ONLY" == 1 && ! -f "$RUNFILES_MANIFEST_FILE" \
+    && -f "${JAVA_RUNFILES}_manifest" ]]; then
+  export RUNFILES_MANIFEST_FILE="${JAVA_RUNFILES}_manifest"
+fi
 
 if [ -z "$RUNFILES_MANIFEST_ONLY" ]; then
   function rlocation() {

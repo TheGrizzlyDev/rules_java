@@ -53,6 +53,7 @@ public final class ChildReuseTest {
             "--persistent_worker");
     ProcessBuilder builder = new ProcessBuilder(command);
     builder.environment().remove("TEST_WARM_MARKER");
+    builder.environment().remove("TEST_RUNFILES_EXPECTED");
     builder.redirectError(root.resolve("coordinator.log").toFile());
     Process process = builder.start();
     ExecutorService reader = Executors.newSingleThreadExecutor();
@@ -70,10 +71,11 @@ public final class ChildReuseTest {
     String warm = null;
     FieldDescriptor envField = WorkRequest.getDescriptor().findFieldByName("environment");
     try {
-      String[] suites = {"First", "Failure", "Second", "First"};
-      String[] markers = {"first", "failure", "second", "first"};
+      String[] suites = {"First", "Failure", "Second", "First", "Second", "First"};
+      String[] markers = {"first", "failure", "second", "first", "second", "first"};
+      int changedDigest = suites.length - 1;
       for (int i = 0; i < suites.length; i++) {
-        if (i == 3) {
+        if (i == changedDigest) {
           changeJarDigest(fixtureCopy);
         }
         Path config = root.resolve("request-" + i + ".config");
@@ -122,6 +124,7 @@ public final class ChildReuseTest {
           environment.put("TEST_TARGET", "//reuse:" + suites[i]);
           environment.put("XML_OUTPUT_FILE", xml.toString());
           environment.put("TEST_TMPDIR", root.resolve("tmp-" + i).toString());
+          prepareRunfiles(root, i, environment);
           for (Map.Entry<String, String> entry : environment.entrySet()) {
             request.addRepeatedField(
                 envField,
@@ -155,7 +158,7 @@ public final class ChildReuseTest {
           child = identity.group(1);
           startup = identity.group(2);
         }
-        if (i < 3) {
+        if (i < changedDigest) {
           check(
               child.equals(identity.group(1))
                   && startup.equals(identity.group(2))
@@ -169,7 +172,7 @@ public final class ChildReuseTest {
               "Changed jar reused the stale child: " + response.getOutput());
           check(!Files.exists(Paths.get("/proc", child)), "Invalidated child leaked");
           System.out.println(
-              "PASS First -> Failure -> Second shared child "
+              "PASS five dispatches including First -> Failure -> Second shared child "
                   + child
                   + ", startup "
                   + startup
@@ -184,7 +187,7 @@ public final class ChildReuseTest {
         if (i == 0) {
           warm = state.group(1);
         }
-        if (i < 3) {
+        if (i < changedDigest) {
           check(
               warm.equals(state.group(1)) && Integer.parseInt(state.group(2)) == i + 1,
               "Classloader/static state was replaced: " + response.getOutput());
@@ -195,6 +198,15 @@ public final class ChildReuseTest {
         }
         if (envField != null) {
           check(
+              response
+                  .getOutput()
+                  .contains(
+                      "RUNFILES_CONTEXT expected=request-"
+                          + i
+                          + " retained="
+                          + (i == changedDigest ? 1 : i + 1)),
+              response.getOutput());
+          check(
               Files.exists(xml)
                   && new String(Files.readAllBytes(xml), StandardCharsets.UTF_8)
                       .contains("WarmFixtures$" + suites[i]),
@@ -202,6 +214,11 @@ public final class ChildReuseTest {
         }
       }
       process.getOutputStream().close();
+      if (envField != null) {
+        System.out.println(
+            "PASS directory and manifest contexts, changed repository mappings, retained objects, "
+                + "rewritten manifest, and subprocess runfiles across five warm dispatches");
+      }
       check(
           process.waitFor(10, TimeUnit.SECONDS) && process.exitValue() == 0,
           "Coordinator did not shut down");
@@ -219,6 +236,34 @@ public final class ChildReuseTest {
           Files.deleteIfExists(path);
         }
       }
+    }
+  }
+
+  private static void prepareRunfiles(Path root, int request, Map<String, String> environment)
+      throws Exception {
+    Path tree = root.resolve("request-" + request + ".runfiles");
+    String canonicalRepo = "repo-" + request;
+    Path data = tree.resolve(canonicalRepo).resolve("data.txt");
+    Files.createDirectories(data.getParent());
+    Files.write(data, Arrays.asList("request-" + request), StandardCharsets.UTF_8);
+    Path mapping = tree.resolve("_repo_mapping");
+    Files.write(mapping, Arrays.asList("source,alias," + canonicalRepo), StandardCharsets.UTF_8);
+    environment.put("TEST_RUNFILES_EXPECTED", "request-" + request);
+    environment.put("TEST_RUNFILES_DATA", "alias/data.txt");
+    environment.put("TEST_RUNFILES_SOURCE_REPO", "source");
+    // Supply only TEST_SRCDIR: setup must add the missing aliases and manifest.
+    if (request == 1 || request == 3) {
+      // Rewrite the same manifest pathname and repo mapping on a later request.
+      // Context identity must include the dispatch, not just environment paths.
+      Path manifest = root.resolve("shared.runfiles_manifest");
+      Files.write(
+          manifest,
+          Arrays.asList(canonicalRepo + "/data.txt " + data, "_repo_mapping " + mapping),
+          StandardCharsets.UTF_8);
+      environment.put("TEST_SRCDIR", root.resolve("shared.runfiles").toString());
+      environment.put("RUNFILES_MANIFEST_ONLY", "1");
+    } else {
+      environment.put("TEST_SRCDIR", tree.toString());
     }
   }
 

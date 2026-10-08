@@ -118,6 +118,9 @@ final class ReusableTestDriver {
         // application state deliberately survive the preceding test.
         updateEnvironment(request.environment);
         request.properties.forEach(System::setProperty);
+        // Runfiles metadata belongs to this dispatch. Retained Runfiles objects
+        // keep their original context; new preload calls use the current one.
+        System.setProperty("bazel.runfiles.context", token + ":" + (++dispatch));
         if (extensions == null) {
           extensions = loadExtensions(loader);
           for (Extension extension : extensions) {
@@ -135,7 +138,7 @@ final class ReusableTestDriver {
                 + " token="
                 + token
                 + " dispatch="
-                + (++dispatch));
+                + dispatch);
         int result = 1;
         try {
           for (Extension extension : extensions) {
