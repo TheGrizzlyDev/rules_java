@@ -22,20 +22,18 @@ Our wiring:
 - worker_executable → coordinator (jvm_test_toolchain.runner). Stable across
   all java_test targets sharing this toolchain, so it's a constant part of
   the WorkerKey.
-- worker_tools → extension jars + aggregated extensions.txt. The coordinator
-  loads the classes named in extensions.txt from these jars at startup, so a
-  change must fork a new worker. Same extension set across targets → same
-  WorkerKey → one coordinator serves them all.
-- test_args → `--config=<execpath>` for this target's config.pb. Delivered as
-  a paramfile per WorkRequest.
-- test_inputs → extension jars + extensions.txt (declared alongside
-  worker_tools so the metadata provider can resolve every tool).
+- worker_tools → extension jars + aggregated extensions.txt (currently also
+  includes ordinary scanned jars; stabilizing this identity is separate work).
+- test_args → `--config=<execpath>` for this target's execution-path config.
+  Bazel materializes these arguments in a per-test paramfile.
+- test_inputs → config, classpaths, extensions, and the original test's runfiles
+  files, including its Java runtime and data dependencies.
 """
 
 # Fixed mnemonic used by `java_test` for `--enable_persistent_test_runners`.
 PERSISTENT_TEST_WORKER_KEY_MNEMONIC = "JvmTestRunner"
 
-def persistent_test_info_providers(ctx, jvm_test_toolchain, ptr_state):
+def persistent_test_info_providers(ctx, jvm_test_toolchain, ptr_state, runfiles):
     """Returns a (possibly empty) list containing a PersistentTestInfo provider.
 
     Args:
@@ -44,6 +42,7 @@ def persistent_test_info_providers(ctx, jvm_test_toolchain, ptr_state):
         (has .runner and .additional_deps).
       ptr_state: struct produced by _create_test_runner_wrapper, with fields
         {config, classpath, additional_jars, extensions_file, extension_jars}.
+      runfiles: the original java_test runfiles before executable substitution.
 
     """
     if not hasattr(testing, "PersistentTestInfo"):
@@ -54,16 +53,13 @@ def persistent_test_info_providers(ctx, jvm_test_toolchain, ptr_state):
         worker_tools_direct.append(ptr_state.extensions_file)
     worker_tools = depset(direct = worker_tools_direct, transitive = [ptr_state.extension_jars])
 
-    # Bazel's worker strategy requires exactly one @flagfile in the spawn argv.
-    # We satisfy that by putting our real argv (--config=<exec-root-relative
-    # path to the target's config.pb>) into an Args object; Bazel materialises
-    # it as a paramfile and passes @paramfile on argv. Exec path (not runfiles
-    # short_path) because in worker mode the coordinator runs at exec root and
-    # per-target files are staged as spawn inputs, not runfiles of the worker.
+    # TestStrategy itself wraps test_args in a paramfile. Forcing another
+    # paramfile here leaves an unexpanded @arg in single-shot execution.
     test_args = ctx.actions.args()
-    test_args.use_param_file("@%s", use_always = True)
-    test_args.set_param_file_format("multiline")
-    test_args.add(ptr_state.config, format = "--config=%s")
+    # Separate the option and file so test-setup.sh can make the file absolute
+    # before changing cwd when persistent execution is disabled.
+    test_args.add("--config")
+    test_args.add(ptr_state.config)
 
     return [
         testing.PersistentTestInfo(
@@ -73,7 +69,10 @@ def persistent_test_info_providers(ctx, jvm_test_toolchain, ptr_state):
             worker_key_mnemonic = PERSISTENT_TEST_WORKER_KEY_MNEMONIC,
             test_args = [test_args],
             worker_executable = jvm_test_toolchain.runner[DefaultInfo].files_to_run,
-            test_inputs = worker_tools,
+            test_inputs = depset(
+                direct = [ptr_state.config],
+                transitive = [runfiles.files, ptr_state.classpath, ptr_state.additional_jars, worker_tools],
+            ),
             worker_tools = worker_tools,
         ),
     ]

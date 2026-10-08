@@ -145,7 +145,7 @@ def bazel_base_binary_impl(ctx, is_test_rule_class):
 
     result = list(providers.values())
     if is_test_rule_class and jvm_test_toolchain and stub_result.ptr_state:
-        result.extend(persistent_test_info_providers(ctx, jvm_test_toolchain, stub_result.ptr_state))
+        result.extend(persistent_test_info_providers(ctx, jvm_test_toolchain, stub_result.ptr_state, runfiles))
     return result
 
 def _get_coverage_runner(ctx):
@@ -267,6 +267,7 @@ def _create_stub(ctx, java_attrs, launcher, executable, jvm_flags, main_class, c
             test_runner_executable = test_runner_executable,
             additional_deps = jvm_test_toolchain.additional_deps,
             java_executable = java_executable,
+            java_exec_path = launcher.path if launcher else java_runtime_toolchain.java_executable_exec_path,
             main_class = main_class,
             coverage_main_class = coverage_main_class,
             coverage_enabled = coverage_enabled,
@@ -325,6 +326,7 @@ def _create_test_runner_wrapper(
         test_runner_executable,
         additional_deps,
         java_executable,
+        java_exec_path,
         main_class,
         coverage_main_class,
         coverage_enabled,
@@ -333,36 +335,31 @@ def _create_test_runner_wrapper(
         runfiles_enabled,
         workspace_prefix):
     config = ctx.actions.declare_file(ctx.label.name + "_test_runner_config.pb")
-    config_args = ctx.actions.args().use_param_file("%s", use_always = True).set_param_file_format("multiline")
-    config_args.add(workspace_prefix, format = "workspace_prefix=%s")
-    config_args.add(java_executable, format = "javabin=%s")
-    config_args.add(main_class, format = "main_class=%s")
-    config_args.add("com.google.devtools.build.java.testrunner.JvmDriver", format = "driver_main=%s")
-    if coverage_enabled:
-        config_args.add(coverage_main_class, format = "coverage_main_class=%s")
-    for flag in jvm_flags:
-        config_args.add(flag, format = "jvm_flag=%s")
-    workspace_prefix_for_map = workspace_prefix
-    config_args.add_all(
-        classpath,
-        map_each = lambda f: [
-            "classpath_entry_label=" + str(f.owner),
-            "classpath_entry_path=" + paths.normalize(workspace_prefix_for_map + f.short_path),
-        ],
-        allow_closure = True,
-    )
     additional_jars = depset(transitive = [dep[JavaInfo].transitive_runtime_jars for dep in additional_deps])
-    config_args.add_all(
-        additional_jars,
-        map_each = lambda f: "driver_classpath_entry=" + paths.normalize(workspace_prefix_for_map + f.short_path),
-        allow_closure = True,
-    )
-
     extensions = _aggregate_extension_class_lists(ctx)
-    if extensions:
-        config_args.add(paths.normalize(workspace_prefix + extensions.file.short_path), format = "extensions_file=%s")
 
-    ctx.actions.write(config, config_args)
+    # The shell wrapper uses the test's runfiles. The native provider replaces
+    # that wrapper with the coordinator, whose runfiles belong to a different
+    # target. Give that route a config containing declared execution paths.
+    configs = [(config, False)]
+    exec_config = None
+    if hasattr(testing, "PersistentTestInfo"):
+        exec_config = ctx.actions.declare_file(ctx.label.name + "_test_runner_exec_config.pb")
+        configs.append((exec_config, True))
+    for output, exec_paths in configs:
+        ctx.actions.write(output, _test_runner_config_args(
+            ctx,
+            output,
+            exec_paths,
+            workspace_prefix,
+            java_exec_path if exec_paths else java_executable,
+            main_class,
+            coverage_main_class if coverage_enabled else None,
+            jvm_flags,
+            classpath,
+            additional_jars,
+            extensions,
+        ))
 
     config_rlocation = paths.normalize(workspace_prefix + config.short_path)
     runner_rlocation = paths.normalize(workspace_prefix + test_runner_executable.short_path)
@@ -387,13 +384,56 @@ def _create_test_runner_wrapper(
     return struct(
         extra_runfiles = extra_runfiles,
         ptr_state = struct(
-            config = config,
+            config = exec_config,
             classpath = classpath,
             additional_jars = additional_jars,
             extensions_file = extensions.file if extensions else None,
             extension_jars = extensions.jars if extensions else depset(),
         ),
     )
+
+def _test_runner_config_args(
+        ctx,
+        output,
+        exec_paths,
+        workspace_prefix,
+        java_executable,
+        main_class,
+        coverage_main_class,
+        jvm_flags,
+        classpath,
+        additional_jars,
+        extensions):
+    # Each call owns its closure: deferred Args expansion must not capture the
+    # config-generation loop's changing exec_paths value.
+    config_args = ctx.actions.args().set_param_file_format("multiline")
+    config_args.add(workspace_prefix, format = "workspace_prefix=%s")
+    config_args.add("execroot" if exec_paths else "runfiles", format = "path_mode=%s")
+    if exec_paths:
+        config_args.add(output.path, format = "execroot_relative_config=%s")
+    config_args.add(java_executable, format = "javabin=%s")
+    config_args.add(main_class, format = "main_class=%s")
+    config_args.add("com.google.devtools.build.java.testrunner.JvmDriver", format = "driver_main=%s")
+    if coverage_main_class:
+        config_args.add(coverage_main_class, format = "coverage_main_class=%s")
+    for flag in jvm_flags:
+        config_args.add(flag, format = "jvm_flag=%s")
+    config_args.add_all(
+        classpath,
+        map_each = lambda f: [
+            "classpath_entry_label=" + str(f.owner),
+            "classpath_entry_path=" + (f.path if exec_paths else paths.normalize(workspace_prefix + f.short_path)),
+        ],
+        allow_closure = True,
+    )
+    config_args.add_all(
+        additional_jars,
+        map_each = lambda f: "driver_classpath_entry=" + (f.path if exec_paths else paths.normalize(workspace_prefix + f.short_path)),
+        allow_closure = True,
+    )
+    if extensions:
+        config_args.add(extensions.file.path if exec_paths else paths.normalize(workspace_prefix + extensions.file.short_path), format = "extensions_file=%s")
+    return config_args
 
 def _aggregate_extension_class_lists(ctx):
     """Returns struct(file=<aggregated txt>, jars=depset[File]) or None.

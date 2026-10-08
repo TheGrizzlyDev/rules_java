@@ -64,12 +64,22 @@ public final class PersistentTestRunner {
     Config config = null;
     List<String> forwarded = new ArrayList<>();
     boolean afterSeparator = false;
-    for (String arg : args) {
+    for (int i = 0; i < args.size(); i++) {
+      String arg = args.get(i);
       if (afterSeparator) {
         forwarded.add(arg);
       } else if ("--".equals(arg)) {
         afterSeparator = true;
-      } else if (arg.startsWith("--config=")) {
+      } else if (arg.startsWith("--config=") || "--config".equals(arg)) {
+        String raw;
+        if ("--config".equals(arg)) {
+          if (++i == args.size()) {
+            throw new IllegalArgumentException("--config requires a path");
+          }
+          raw = args.get(i);
+        } else {
+          raw = arg.substring("--config=".length());
+        }
         // Two supported shapes:
         //   - one-shot mode (wrapper.sh runs): path is already absolute
         //     (${JAVA_RUNFILES}/…) — pass through.
@@ -77,7 +87,6 @@ public final class PersistentTestRunner {
         //     relative (bazel-out/…); the coordinator's cwd is the exec root,
         //     so a plain Paths.get resolves correctly.
         // If neither works, fall back to runfiles rlocation for legacy paths.
-        String raw = arg.substring("--config=".length());
         Path cfgPath = Paths.get(raw);
         if (!Files.exists(cfgPath)) {
           cfgPath = Paths.get(resolveRunfile(Runfiles.preload().unmapped(), raw));
@@ -104,20 +113,20 @@ public final class PersistentTestRunner {
       throw new IllegalStateException("driver_main is required in the config");
     }
 
-    Runfiles runfiles = Runfiles.preload().unmapped();
+    Runfiles runfiles = config.execPaths ? null : Runfiles.preload().unmapped();
 
-    String javabin = resolveRunfile(runfiles, config.javabin);
+    String javabin = resolveConfigPath(config, runfiles, config.javabin);
     String extensionsFilePath = null;
     if (config.extensionsFile != null && !config.extensionsFile.isEmpty()) {
-      extensionsFilePath = resolveRunfile(runfiles, config.extensionsFile);
+      extensionsFilePath = resolveConfigPath(config, runfiles, config.extensionsFile);
     }
 
     List<String> classpath = new ArrayList<>();
     for (String entry : config.driverClasspath) {
-      classpath.add(resolveRunfile(runfiles, entry));
+      classpath.add(resolveConfigPath(config, runfiles, entry));
     }
     for (Config.ClasspathEntry entry : config.classpath) {
-      classpath.add(resolveRunfile(runfiles, entry.path));
+      classpath.add(resolveConfigPath(config, runfiles, entry.path));
     }
     if (wrapperArgs.mainAdviceClasspath != null && !wrapperArgs.mainAdviceClasspath.isEmpty()) {
       classpath.add(0, wrapperArgs.mainAdviceClasspath);
@@ -453,6 +462,15 @@ public final class PersistentTestRunner {
     } catch (IOException | NoSuchAlgorithmException e) {
       return "unavailable";
     }
+  }
+
+  private static String resolveConfigPath(Config config, Runfiles runfiles, String path) {
+    if (config.execPaths) {
+      // The absolute config location records the execution root even when
+      // test-setup.sh has changed cwd for single-shot execution.
+      return config.execRoot.resolve(path).normalize().toString();
+    }
+    return resolveRunfile(runfiles, path);
   }
 
   private static String resolveRunfile(Runfiles runfiles, String rlocation) {

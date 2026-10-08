@@ -17,6 +17,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -32,6 +33,8 @@ final class Config {
     }
   }
 
+  final Path execRoot;
+  final boolean execPaths;
   final String workspacePrefix;
   final String javabin;
   final String mainClass;
@@ -43,6 +46,8 @@ final class Config {
   final List<String> driverClasspath;
 
   private Config(
+      Path execRoot,
+      boolean execPaths,
       String workspacePrefix,
       String javabin,
       String mainClass,
@@ -52,6 +57,8 @@ final class Config {
       List<String> jvmFlags,
       List<ClasspathEntry> classpath,
       List<String> driverClasspath) {
+    this.execRoot = execRoot;
+    this.execPaths = execPaths;
     this.workspacePrefix = workspacePrefix;
     this.javabin = javabin;
     this.mainClass = mainClass;
@@ -64,6 +71,8 @@ final class Config {
   }
 
   static Config parse(Path file) throws IOException {
+    String execrootRelativeConfig = null;
+    boolean execPaths = false;
     String workspacePrefix = "";
     String javabin = null;
     String mainClass = null;
@@ -82,6 +91,15 @@ final class Config {
       String key = line.substring(0, eq);
       String value = line.substring(eq + 1);
       switch (key) {
+        case "execroot_relative_config":
+          execrootRelativeConfig = value;
+          break;
+        case "path_mode":
+          if (!value.equals("execroot") && !value.equals("runfiles")) {
+            throw new IllegalArgumentException("unknown path_mode: " + value);
+          }
+          execPaths = value.equals("execroot");
+          break;
         case "workspace_prefix":
           workspacePrefix = value;
           break;
@@ -132,7 +150,25 @@ final class Config {
     if (javabin == null || mainClass == null) {
       throw new IllegalStateException("javabin and main_class are required in " + file);
     }
+    Path execRoot = null;
+    if (execPaths) {
+      if (execrootRelativeConfig == null) {
+        throw new IllegalArgumentException("execroot_relative_config is required in " + file);
+      }
+      Path relativeConfig = Paths.get(execrootRelativeConfig).normalize();
+      Path absoluteConfig = file.toAbsolutePath().normalize();
+      if (relativeConfig.isAbsolute() || relativeConfig.startsWith("..")
+          || relativeConfig.toString().isEmpty() || !absoluteConfig.endsWith(relativeConfig)) {
+        throw new IllegalArgumentException("Invalid execroot_relative_config in " + file);
+      }
+      execRoot = absoluteConfig;
+      for (int i = 0; i < relativeConfig.getNameCount(); i++) {
+        execRoot = execRoot.getParent();
+      }
+    }
     return new Config(
+        execRoot,
+        execPaths,
         workspacePrefix,
         javabin,
         mainClass,
