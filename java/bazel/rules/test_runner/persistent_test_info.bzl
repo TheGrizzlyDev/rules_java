@@ -22,8 +22,9 @@ Our wiring:
 - worker_executable → coordinator (jvm_test_toolchain.runner). Stable across
   all java_test targets sharing this toolchain, so it's a constant part of
   the WorkerKey.
-- worker_tools → extension jars + aggregated extensions.txt (currently also
-  includes ordinary scanned jars; stabilizing this identity is separate work).
+- worker_tools → empty: extensions and scanned test jars load in child JVMs,
+  so they are per-test inputs rather than coordinator tools. The coordinator's
+  own implementation and dependencies come from worker_executable.
 - test_args → `--config <execpath> --` for this target's execution-path config.
   Bazel materializes these arguments in a per-test paramfile.
 - test_inputs → config, classpaths, extensions, and the original test's runfiles
@@ -48,10 +49,9 @@ def persistent_test_info_providers(ctx, jvm_test_toolchain, ptr_state, runfiles)
     if not hasattr(testing, "PersistentTestInfo"):
         return []
 
-    worker_tools_direct = []
+    test_inputs_direct = [ptr_state.config]
     if ptr_state.extensions_file:
-        worker_tools_direct.append(ptr_state.extensions_file)
-    worker_tools = depset(direct = worker_tools_direct, transitive = [ptr_state.extension_jars])
+        test_inputs_direct.append(ptr_state.extensions_file)
 
     # TestStrategy itself wraps test_args in a paramfile. Forcing another
     # paramfile here leaves an unexpanded @arg in single-shot execution.
@@ -73,9 +73,9 @@ def persistent_test_info_providers(ctx, jvm_test_toolchain, ptr_state, runfiles)
             test_args = [test_args],
             worker_executable = jvm_test_toolchain.runner[DefaultInfo].files_to_run,
             test_inputs = depset(
-                direct = [ptr_state.config],
-                transitive = [runfiles.files, ptr_state.classpath, ptr_state.additional_jars, worker_tools],
+                direct = test_inputs_direct,
+                transitive = [runfiles.files, ptr_state.classpath, ptr_state.additional_jars, ptr_state.extension_jars],
             ),
-            worker_tools = worker_tools,
+            worker_tools = depset(),
         ),
     ]

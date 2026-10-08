@@ -151,3 +151,27 @@ java_test(
     target_compatible_with = ["@platforms//os:linux"],
     use_testrunner = False,
 )
+
+java_test(
+    name = "CoordinatorSharingFirst",
+    size = "small",
+    timeout = "short",
+    srcs = ["CoordinatorSharingTest.java"],
+    args = ["first"],
+    env = {"TEST_SHARING_MARKER": "first"},
+    main_class = "com.google.devtools.build.java.testrunner.CoordinatorSharingTest",
+    target_compatible_with = ["@platforms//os:linux"],
+    use_testrunner = False,
+)
+
+java_test(
+    name = "CoordinatorSharingSecond",
+    size = "small",
+    timeout = "short",
+    srcs = ["CoordinatorSharingTest.java"],
+    args = ["second"],
+    env = {"TEST_SHARING_MARKER": "second"},
+    main_class = "com.google.devtools.build.java.testrunner.CoordinatorSharingTest",
+    target_compatible_with = ["@platforms//os:linux"],
+    use_testrunner = False,
+)
