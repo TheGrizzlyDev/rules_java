@@ -13,6 +13,7 @@
 # limitations under the License.
 load("//java:defs.bzl", "java_binary", "java_library")
 load("//java/bazel/rules:jvm_test_info.bzl", "jvm_persistent_test_runner_info")
+load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
 load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
 
 package(default_applicable_licenses = ["@rules_java//:license"])
@@ -48,7 +49,12 @@ java_library(
 
 java_library(
     name = "jvm_driver",
-    srcs = ["JvmDriver.java", "NativeTestContext.java", "ReusableTestDriver.java"],
+    srcs = [
+        "JvmDriver.java",
+        "NativeTestContext.java",
+        "ReusableCoverage.java",
+        "ReusableTestDriver.java",
+    ],
     resources = select({
         "@bazel_tools//src/conditions:linux": [":libtest_context.so"],
         "//conditions:default": [],
@@ -91,8 +97,20 @@ jvm_persistent_test_runner_info(
     visibility = ["//visibility:public"],
 )
 
+bool_flag(
+    name = "enabled",
+    build_setting_default = True,
+    visibility = ["//visibility:public"],
+)
+
+config_setting(
+    name = "enabled_setting",
+    flag_values = {":enabled": "true"},
+)
+
 toolchain(
     name = "persistent_test_runner_toolchain",
+    target_settings = [":enabled_setting"],
     toolchain = ":jvm_persistent_test_runner_info",
     toolchain_type = "//java/bazel/rules:jvm_test_toolchain_type",
     visibility = ["//visibility:public"],

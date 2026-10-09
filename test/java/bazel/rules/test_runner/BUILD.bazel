@@ -288,3 +288,23 @@ java_test(
     target_compatible_with = ["@platforms//os:linux"],
     deps = ["@bazel_tools//tools/jdk:TestRunner"],
 )
+
+java_test(
+    name = "CoverageReuseTest",
+    size = "small",
+    srcs = ["CoverageReuseTest.java"],
+    main_class = "com.google.devtools.build.java.testrunner.CoverageReuseTest",
+    tags = ["manual"],
+    target_compatible_with = ["@platforms//os:linux"],
+    use_testrunner = False,
+    runtime_deps = [
+        "//java/bazel/rules/test_runner:fifo_connection",
+        "//java/bazel/rules/test_runner/persistent_worker:persistent_worker_lib",
+        "//java/runfiles",
+    ],
+    deps = [
+        "//java/bazel/rules/test_runner:jvm_driver",
+        "//java/bazel/rules/test_runner:persistent_test_runner",
+        "//test/java/com/google/devtools/build/java/testrunner/coverage:fixtures",
+    ],
+)

@@ -30,8 +30,10 @@ retain the original target's runfiles context and resolve its paths for each req
 4. Validate actual Bazel timeout and interruption routing through worker cancellation
    and sandbox execution, including child cleanup and subsequent worker recovery.
 5. Run a small performance comparison against ordinary Bazel test execution.
-6. Validate coverage in the existing fresh-child path, then support per-request
-   coverage collection in retained JVMs.
+6. Validate ordinary coverage and per-request coverage collection in retained JVMs.
+
+All six steps have passed their acceptance checks. Evidence and reproduction
+commands are recorded below.
 
 Parallel dispatch is deferred until multiplex persistent test workers are supported.
 The provider currently declares `multiplex = False`, so Bazel sends one active test
@@ -46,11 +48,11 @@ order over a few repetitions, and report elapsed time and per-test execution tim
 Record cold worker startup separately from runs retaining workers, and check child
 identities to establish that the measured persistent runs actually reused JVMs.
 
-Coverage currently selects a fresh child. Bazel's JaCoCo runner emits its report in
-a JVM shutdown hook, which does not run after each dispatch in a retained child.
-Reuse therefore needs explicit per-request collection and report destinations, plus
-coverage counter reset between requests to avoid attributing earlier tests' hits to
-later tests. This instrumentation reset does not reset warm application state.
+Coverage dispatches collect JaCoCo execution data and write a report before the
+worker response. Probes reset between requests so earlier tests' hits are not
+attributed to later tests. This instrumentation reset preserves warm application
+state. Class initializers execute once, so their coverage appears only in the
+dispatch that initializes the class.
 
 The first acceptance milestone is observed reuse of the same child across distinct
 tests, rather than inference from coordinator reuse or passing tests alone.
@@ -58,9 +60,10 @@ tests, rather than inference from coordinator reuse or passing tests alone.
 ## Current execution scope
 
 The retained child path supports the standard Bazel JUnit runner on Linux. Arbitrary main
-classes, debugging, main advice, and coverage currently use the existing fresh
-child path. The coordinator uses the public returning `BazelTestRunner.runTests`
-entry when available; an adapter calls `runTestsInSuite` in older runner jars.
+classes, debugging, and main advice use the existing fresh-child path. Standard
+JUnit coverage uses retained children too. The coordinator uses the public returning
+`BazelTestRunner.runTests` entry when available; an adapter calls `runTestsInSuite`
+in older runner jars.
 
 One append-only URL classloader retains the test jars and loaded classes. The
 compatibility check conservatively fingerprints every attached jar, including
@@ -155,9 +158,26 @@ new suites share a replacement JVM. It also cancels a fresh child and a driver
 blocked before FIFO connection, requiring the replacement JVM's dispatch and warm
 static counters to survive both operations. Protocol tests cover queued, duplicate,
 late, and unknown cancellation. This implements the worker message contract;
-Bazel's cancellation routing and sandbox integration need separate validation
-before advertising the capability generally. Parallel handler dispatch remains
+Bazel's cancellation routing and sandbox integration are covered by the opt-in
+`BazelCancellationFixture` and `bazel_cancellation_test.py` rig. Use
+`--worker_sandboxing=JvmTestRunner=1 --experimental_worker_cancellation` and the
+`supports-worker-cancellation` test tag. The Bazel fork maps that empty tag value
+to the worker capability value `1`. Singleplex test requests honor the spawn's
+timeout; sandboxed cancellable workers retire the child and return to the pool,
+while other workers are invalidated on timeout. Parallel handler dispatch remains
 future work.
+
+Run `python3 test/java/bazel/rules/test_runner/bazel_cancellation_test.py
+/absolute/custom/bazel --artifacts /tmp/cancellation-proof` in the supported Linux
+build environment. The rig waits until the hanging suite reports its actual PID,
+interrupts the Bazel client or waits for a two-second timeout, verifies the PID
+disappears, and requires two subsequent tests to retain a replacement child through
+the same coordinator.
+
+For a baseline using the ordinary Java launcher, disable selection of this repo's
+persistent toolchain with `--@rules_java//java/bazel/rules/test_runner:enabled=false`.
+Disabling only `--enable_persistent_test_runners` still exercises the coordinator's
+single-shot fallback when its toolchain is selected.
 
 ## Reproducing child reuse
 
@@ -260,7 +280,8 @@ ordered-dispatch results are in `/tmp/rules-java-jvm-reuse.YKhDrU`.
 The helper supports the directory-cache layouts exercised by JDKs 8, 21, and 25.
 The proof rig now applies this repo's test-specific build options during its build
 phase too, avoiding unnecessary C++ dependency rebuilds between build and test.
-Concurrency, cancellation, coverage, and performance measurements remain next.
+At that milestone, concurrency, cancellation, coverage, and performance measurements
+remained later work. The subsequent serial milestones are recorded below.
 
 ## Cancellation acceptance evidence
 
@@ -278,7 +299,101 @@ token `7b2eca10-5eda-4dc0-a277-76505e3f13d0` across 22 passing cases on JDK 25.
 Copied JDK 8 and JDK 21 logs, XML, the native Bazel logs, and its `summary.json` are
 in `/tmp/rules-java-cancellation-proof`.
 
-The next steps are validating Bazel's cancellation/sandbox routing, a small benchmark
-against ordinary Bazel test execution, and coverage validation and reuse support.
-Parallel dispatch is deferred until multiplex persistent test workers are supported.
-Cancellation capability is not yet advertised by default.
+Bazel cancellation routing, the small baseline benchmark, and retained coverage
+are now validated below. Parallel dispatch is deferred until multiplex persistent
+test workers are supported. Cancellation capability remains explicitly opt-in.
+
+## Bazel cancellation routing acceptance evidence
+
+The actual Bazel interruption and timeout checks on 2026-10-09 passed. Interrupting
+the hanging suite retired child PID `154075` in 1.02 seconds. Subsequent tests shared
+replacement PID `155283` with dispatch counts 1 and 2. A two-second timeout was
+reported as `TIMEOUT`, retired that child in 3.02 seconds including its remaining
+timeout budget, and recovered with PID `157089` across two more passing dispatches.
+Neither recovery created a new coordinator. Proof logs and XML are in
+`/tmp/rules-java-routing-proof-final`.
+
+All eighteen repository worker regressions passed, and Bazel's `WorkerTests` suite
+passed all 244 cases, including deadline and sandboxed/unsandboxed timeout recovery
+regressions. The native routing change is committed as `25a082a`.
+
+## Small benchmark against ordinary Bazel
+
+The 2026-10-09 benchmark used Bazel's `CollectionUtilsTest`, `ExtremaTest`, and
+`ImmutableSharedKeyMapTest`: three short targets containing 22 passing test cases.
+Both strategies used the same custom Bazel binary, JDK 25, local inputs, and serial
+execution. Compilation and server warmup were excluded; result caching was disabled.
+Three repetitions per strategy alternated execution order. The ordinary baseline
+selected the normal Java launcher by disabling the persistent toolchain.
+
+| Median over three runs | Ordinary Bazel | Warm persistent JVM | Reduction |
+| --- | ---: | ---: | ---: |
+| Whole command elapsed | 1.826 s | 1.125 s | 38.4% |
+| Summed test execution from Bazel build events | 1.000 s | 0.108 s | 89.2% |
+
+The cold persistent run took 1.719 s overall and 0.891 s in test execution. All
+12 persistent dispatches, including that cold run, retained child PID `212246`
+and startup token `a09d18e1-65eb-448d-9a87-ed5c1483d3f0`. This small sample provides
+early feedback for these suites; it is not a general performance estimate.
+Commands, build events, XML, logs, timings, and the measured binary's SHA-256 are in
+`/tmp/rules-java-benchmark-precise`.
+
+```sh
+python3 test/java/bazel/rules/test_runner/reuse_benchmark.py \
+  /absolute/custom/bazel /absolute/bazel/checkout \
+  --output-base /absolute/existing/isolated/output-base \
+  --artifacts /tmp/reuse-benchmark
+```
+
+## Retained coverage
+
+`ReusableCoverage` uses the JaCoCo runtime in the test's own loader. It disables
+shutdown-time dumping, resets probes at dispatch start, captures and resets them
+at dispatch end, and invokes Bazel's coverage analyzer on only the current request's
+jars. Each request writes unique `.exec` and `.dat` files in its own `COVERAGE_DIR`.
+The driver reports collection failures as test failures. Coverage and ordinary
+requests use separate child compatibility keys, while both retain application state.
+
+The Bazel fork strips the single-shot coverage wrapper from worker startup, carries
+coverage destinations as request environment, and retains Bazel's subsequent report
+merging spawn. It cleans prior coverage intermediates before repeated execution.
+The split merging wrapper no longer tries to recreate read-only metadata inputs.
+These native changes are committed as `05e695e` in the Bazel checkout.
+
+The coverage acceptance rig compares ordinary coverage with persistent coverage
+and repeats the persistent run without test-result caching. Two repository targets
+cover different methods of one retained class. Each report must cover its own
+method and leave the other uncovered, while classloader identity and the application
+static counter survive all four dispatches. Bazel's three collection suites share
+one child across six covered dispatches; their non-initializer method hit counts
+match ordinary execution. Every report contains covered source lines.
+
+The 2026-10-09 proof retained repository child PID `347498` and Bazel child PID
+`350369`. The initial Bazel reports covered 64, 28, and 74 lines respectively.
+Repeated reports covered 64, 27, and 73 lines: class initialization does not execute
+again in the warm loader. Copied reports, commands, logs, XML, and identities are in
+`/tmp/rules-java-coverage-acceptance`. A final driver check also passed all three
+Bazel suites with shared child PID `72627`; its copied reports and XML are in
+that proof directory's `final-driver` subdirectory.
+
+```sh
+python3 test/java/bazel/rules/test_runner/coverage_reuse_test.py \
+  /absolute/custom/bazel --artifacts /tmp/coverage-proof \
+  --bazel-checkout /absolute/bazel/checkout \
+  --bazel-output-base /absolute/existing/isolated/output-base
+```
+
+Omit the two Bazel checkout arguments to check only this repository. The rig selects
+JDK 21 for repository tests and coverage tools because this repo's default tool
+runtime is Java 8 and the current Bazel LCOV merger uses newer Java APIs. Bazel's
+own suites use their configured JDK 25. `--bazel-action-path` can preserve a distinct
+stable action PATH for that checkout.
+
+`CoverageReuseTest` additionally drives First, Second, First directly through a
+coordinator and checks isolated reports, retained state, and child cleanup. Its
+Java 8 and Java 21 child assertions passed; the complete outer coverage command
+passed with test and tool runtimes set to JDK 21 and Java-only collection selected.
+
+The final repository regression run passed all eighteen worker and runfiles targets
+on JDK 8 after the coverage changes. Bazel's 244 worker cases passed after the native
+coverage routing change, and both acceptance scripts compile successfully.

@@ -161,10 +161,12 @@ public final class PersistentTestRunner {
     if (wrapperArgs.mainAdviceClasspath != null && !wrapperArgs.mainAdviceClasspath.isEmpty()) {
       classpath.add(0, wrapperArgs.mainAdviceClasspath);
     }
-    if (config.mainClass.equals("com.google.testing.junit.runner.BazelTestRunner")
+    if ((config.mainClass.equals("com.google.testing.junit.runner.BazelTestRunner")
+            || (config.mainClass.equals("com.google.testing.coverage.JacocoCoverageRunner")
+                && "com.google.testing.junit.runner.BazelTestRunner"
+                    .equals(config.coverageMainClass)))
         && config.driverMain.equals("com.google.devtools.build.java.testrunner.JvmDriver")
         && System.getProperty("os.name").equals("Linux")
-        && config.coverageMainClass == null
         && wrapperArgs.mainAdvice == null
         && wrapperArgs.mainAdviceClasspath == null
         && wrapperArgs.jvmDebugPort == null
@@ -382,6 +384,7 @@ public final class PersistentTestRunner {
     List<String> flags = new ArrayList<>(config.jvmFlags);
     flags.addAll(wrapperArgs.jvmFlagsCmdline);
     Map<String, String> properties = new java.util.LinkedHashMap<>();
+    properties.put("bazel.persistent.coverage", Boolean.toString(config.coverageMainClass != null));
     flags.removeIf(
         flag -> {
           if (flag.startsWith("-Dbazel.test_suite=")) {
@@ -406,6 +409,7 @@ public final class PersistentTestRunner {
     environment.put("PWD", properties.get("user.dir"));
     List<String> testClasspath = classpath.subList(config.driverClasspath.size(), classpath.size());
     StringBuilder key = new StringBuilder(Paths.get(javabin).toRealPath().toString());
+    key.append("\ncoverage=").append(config.coverageMainClass != null);
     for (String flag : flags) {
       key.append('\n').append(flag);
     }

@@ -80,6 +80,10 @@ final class TestEnvironment {
             "PYTHON_RUNFILES",
             "RUNFILES_MANIFEST_FILE",
             "XML_OUTPUT_FILE",
+            "COVERAGE_DIR",
+            "COVERAGE_MANIFEST",
+            "COVERAGE_OUTPUT_FILE",
+            "JAVA_COVERAGE_FILE",
             "TEST_SHARD_STATUS_FILE",
             "TEST_PREMATURE_EXIT_FILE",
             "TEST_WARNINGS_OUTPUT_FILE",
@@ -96,6 +100,7 @@ final class TestEnvironment {
     for (String name :
         Arrays.asList(
             "TEST_TMPDIR",
+            "COVERAGE_DIR",
             "TEST_UNDECLARED_OUTPUTS_DIR",
             "TEST_UNDECLARED_OUTPUTS_ANNOTATIONS_DIR")) {
       String value = environment.get(name);
@@ -108,6 +113,10 @@ final class TestEnvironment {
       if (value != null && !value.isEmpty()) {
         Files.createDirectories(Paths.get(value).getParent());
       }
+    }
+    if (environment.containsKey("COVERAGE_DIR") && !environment.containsKey("JAVA_COVERAGE_FILE")) {
+      environment.put(
+          "JAVA_COVERAGE_FILE", Paths.get(environment.get("COVERAGE_DIR"), "jvcov").toString());
     }
     String tmpdir = environment.get("TEST_TMPDIR");
     if (tmpdir != null && !tmpdir.isEmpty()) {

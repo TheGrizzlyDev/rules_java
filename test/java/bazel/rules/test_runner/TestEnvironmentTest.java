@@ -100,6 +100,22 @@ public final class TestEnvironmentTest {
       context.remove("RUNTEST_PRESERVE_CWD");
       context.put("COVERAGE_DIR", "coverage");
       check(root.equals(TestEnvironment.workingDirectory(context, root)), "Coverage cwd changed");
+      context.put("COVERAGE_MANIFEST", "coverage.manifest");
+      context.put("COVERAGE_OUTPUT_FILE", "coverage.dat");
+      Map<String, String> coverage = TestEnvironment.prepare(context, root);
+      for (String name :
+          Arrays.asList("COVERAGE_DIR", "COVERAGE_MANIFEST", "COVERAGE_OUTPUT_FILE")) {
+        check(root.resolve(context.get(name)).equals(Paths.get(coverage.get(name))), name);
+      }
+      check(Files.isDirectory(root.resolve("coverage")), "Coverage directory was not created");
+      check(
+          root.resolve("coverage/jvcov").equals(Paths.get(coverage.get("JAVA_COVERAGE_FILE"))),
+          "Missing coverage destination");
+      context.put("JAVA_COVERAGE_FILE", "explicit/jvcov");
+      check(
+          root.resolve("explicit/jvcov")
+              .equals(Paths.get(TestEnvironment.prepare(context, root).get("JAVA_COVERAGE_FILE"))),
+          "Explicit coverage destination changed");
       context.remove("COVERAGE_DIR");
       context.put("TEST_SRCDIR", "missing.runfiles");
       try {

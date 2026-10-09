@@ -116,6 +116,11 @@ final class ReusableTestDriver {
         // application state deliberately survive the preceding test.
         NativeTestContext.apply(request.environment, request.properties.get("user.dir"));
         request.properties.forEach(System::setProperty);
+        if (Boolean.getBoolean("bazel.persistent.coverage")) {
+          // Extensions can initialize instrumented classes before suite collection.
+          // They must not install the agent's ordinary shutdown-time dump.
+          System.setProperty("jacoco-agent.output", "none");
+        }
         // Runfiles metadata belongs to this dispatch. Retained Runfiles objects
         // keep their original context; new preload calls use the current one.
         System.setProperty("bazel.runfiles.context", token + ":" + (++dispatch));
@@ -138,7 +143,11 @@ final class ReusableTestDriver {
                 + " dispatch="
                 + dispatch);
         int result = 1;
+        ReusableCoverage coverage = null;
         try {
+          if (Boolean.getBoolean("bazel.persistent.coverage")) {
+            coverage = new ReusableCoverage(loader, request.classpath, request.environment);
+          }
           for (Extension extension : extensions) {
             extension.onTestStart(testContext);
           }
@@ -151,6 +160,14 @@ final class ReusableTestDriver {
             try {
               extensions.get(i).onTestShutdown(testContext);
             } catch (Throwable e) {
+              e.printStackTrace();
+              result = 1;
+            }
+          }
+          if (coverage != null) {
+            try {
+              coverage.close();
+            } catch (Exception e) {
               e.printStackTrace();
               result = 1;
             }
