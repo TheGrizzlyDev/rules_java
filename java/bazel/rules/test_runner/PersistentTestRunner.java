@@ -290,14 +290,14 @@ public final class PersistentTestRunner {
       channel = FifoConnection.open(process, c2j, j2c, connectionTimeout);
     } catch (IOException | InterruptedException e) {
       process.destroyForcibly();
+      boolean interrupted = ReusableJvm.waitForExit(process, 1000);
       // Bound cleanup even if a descendant has inherited the child's output pipes.
       try {
-        process.waitFor(1, java.util.concurrent.TimeUnit.SECONDS);
         stdoutDrain.join(1000);
         stderrDrain.join(1000);
       } catch (InterruptedException cleanupInterrupted) {
         e.addSuppressed(cleanupInterrupted);
-        Thread.currentThread().interrupt();
+        interrupted = true;
       }
       Files.deleteIfExists(c2j);
       Files.deleteIfExists(j2c);
@@ -306,6 +306,9 @@ public final class PersistentTestRunner {
         Files.deleteIfExists(classpathJar);
       }
       pool.release(tracker);
+      if (interrupted) {
+        Thread.currentThread().interrupt();
+      }
       if (e instanceof InterruptedException) {
         throw (InterruptedException) e;
       }
@@ -345,13 +348,13 @@ public final class PersistentTestRunner {
       closeChannel.start();
       long cleanupStarted = System.nanoTime();
       long cleanupNanos = TimeUnit.SECONDS.toNanos(1);
+      boolean interrupted = ReusableJvm.waitForExit(process, 1000);
       try {
-        process.waitFor(remainingNanos(cleanupStarted, cleanupNanos), TimeUnit.NANOSECONDS);
         joinWithin(closeChannel, cleanupStarted, cleanupNanos);
         joinWithin(stdoutDrain, cleanupStarted, cleanupNanos);
         joinWithin(stderrDrain, cleanupStarted, cleanupNanos);
       } catch (InterruptedException e) {
-        Thread.currentThread().interrupt();
+        interrupted = true;
       }
       Files.deleteIfExists(c2j);
       Files.deleteIfExists(j2c);
@@ -359,6 +362,9 @@ public final class PersistentTestRunner {
       pool.release(tracker);
       if (classpathJar != null) {
         Files.deleteIfExists(classpathJar);
+      }
+      if (interrupted) {
+        Thread.currentThread().interrupt();
       }
     }
   }

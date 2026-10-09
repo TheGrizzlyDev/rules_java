@@ -252,6 +252,31 @@ public final class WarmFixtures {
   }
 
   @RunWith(JUnit4.class)
+  public static final class Hanging {
+    @Test
+    public void waitsForCancellation() throws Exception {
+      String pid = "";
+      for (String line :
+          Files.readAllLines(Paths.get("/proc/self/status"), StandardCharsets.UTF_8)) {
+        if (line.startsWith("Pid:")) {
+          pid = line.substring(4).trim();
+        }
+      }
+      java.nio.file.Path marker = Paths.get(System.getProperty("test.cancel.started"));
+      java.nio.file.Path temporary = marker.resolveSibling(marker.getFileName() + ".tmp");
+      Files.write(temporary, Arrays.asList(pid), StandardCharsets.UTF_8);
+      Files.move(temporary, marker, java.nio.file.StandardCopyOption.ATOMIC_MOVE);
+      while (true) {
+        try {
+          Thread.sleep(10000);
+        } catch (InterruptedException ignored) {
+          // Deliberately uncooperative: cancellation must retire the JVM.
+        }
+      }
+    }
+  }
+
+  @RunWith(JUnit4.class)
   public static final class Failure {
     @Test
     public void failingTest() throws Exception {

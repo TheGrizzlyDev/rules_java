@@ -254,3 +254,27 @@ java_test(
         "@com_google_protobuf//java/core",
     ],
 )
+
+java_test(
+    name = "CancellationTest",
+    size = "small",
+    timeout = "short",
+    srcs = ["CancellationTest.java"],
+    main_class = "com.google.devtools.build.java.testrunner.CancellationTest",
+    target_compatible_with = ["@platforms//os:linux"],
+    use_testrunner = False,
+    runtime_deps = [
+        "//java/bazel/rules/test_runner:fifo_connection",
+        "//java/bazel/rules/test_runner/persistent_worker:persistent_worker_lib",
+        "//java/runfiles",
+    ],
+    deps = [
+        ":warm_fixtures",
+        "//java/bazel/rules/test_runner:jvm_driver",
+        "//java/bazel/rules/test_runner:persistent_test_runner",
+        "//java/bazel/rules/test_runner/extension",
+        "//java/bazel/rules/test_runner/wire",
+        "//java/bazel/rules/test_runner/persistent_worker:worker_protocol_java_proto",
+        "@com_google_protobuf//java/core",
+    ],
+)

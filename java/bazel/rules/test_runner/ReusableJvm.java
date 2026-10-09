@@ -143,8 +143,10 @@ final class ReusableJvm implements AutoCloseable {
       }
       return jvm;
     } catch (IOException | InterruptedException e) {
+      boolean interrupted = false;
       if (process != null) {
         process.destroyForcibly();
+        interrupted = waitForExit(process, 1000);
       }
       if (channel != null) {
         closeWire(channel);
@@ -152,6 +154,9 @@ final class ReusableJvm implements AutoCloseable {
       Files.deleteIfExists(c2j);
       Files.deleteIfExists(j2c);
       Files.deleteIfExists(directory);
+      if (interrupted) {
+        Thread.currentThread().interrupt();
+      }
       throw e;
     }
   }
@@ -276,6 +281,7 @@ final class ReusableJvm implements AutoCloseable {
 
   @Override
   public void close() {
+    boolean interrupted = Thread.interrupted();
     try {
       channel.send(WorkerShutdown.INSTANCE);
       if (!process.waitFor(1, TimeUnit.SECONDS)) {
@@ -285,12 +291,12 @@ final class ReusableJvm implements AutoCloseable {
       process.destroyForcibly();
     } catch (InterruptedException e) {
       process.destroyForcibly();
-      Thread.currentThread().interrupt();
+      interrupted = true;
     } finally {
       process.destroyForcibly();
       closeWire(channel);
+      interrupted |= waitForExit(process, 1000);
       try {
-        process.waitFor(1, TimeUnit.SECONDS);
         reader.join(1000);
         stdoutDrain.join(1000);
         stderrDrain.join(1000);
@@ -298,11 +304,33 @@ final class ReusableJvm implements AutoCloseable {
         Files.deleteIfExists(j2c);
         Files.deleteIfExists(directory);
       } catch (InterruptedException e) {
-        Thread.currentThread().interrupt();
+        interrupted = true;
       } catch (IOException e) {
         stderr.println("Failed to remove reusable JVM IPC: " + e);
       }
+      if (interrupted) {
+        Thread.currentThread().interrupt();
+      }
     }
+  }
+
+  /** Reaps a killed child without allowing a cancellation interrupt to skip cleanup. */
+  static boolean waitForExit(Process process, long timeoutMillis) {
+    boolean interrupted = Thread.interrupted();
+    long started = System.nanoTime();
+    long budget = TimeUnit.MILLISECONDS.toNanos(timeoutMillis);
+    while (process.isAlive()) {
+      long remaining = budget - (System.nanoTime() - started);
+      if (remaining <= 0) {
+        break;
+      }
+      try {
+        process.waitFor(remaining, TimeUnit.NANOSECONDS);
+      } catch (InterruptedException e) {
+        interrupted = true;
+      }
+    }
+    return interrupted;
   }
 
   private static void closeWire(WireChannel channel) {

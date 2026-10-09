@@ -18,8 +18,9 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Business logic for a single work unit. Implementations must be stateless across calls: the same
- * instance handles many requests (persistent worker mode) as well as a single one-shot invocation.
+ * Business logic for a single work unit. The same instance handles sequential requests and may
+ * retain state between them. Worker mode runs handlers on a request thread; cancellation interrupts
+ * that thread. Implementations must release request-owned resources before returning.
  */
 public interface WorkHandler {
   /**
@@ -33,6 +34,7 @@ public interface WorkHandler {
    *     WorkResponse.output}.
    * @return the exit code for this unit (0 on success).
    */
-  int handle(List<String> args, Map<String, String> environment, PrintStream stdout, PrintStream stderr)
+  int handle(
+      List<String> args, Map<String, String> environment, PrintStream stdout, PrintStream stderr)
       throws Exception;
 }

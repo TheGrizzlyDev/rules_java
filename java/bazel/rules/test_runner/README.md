@@ -111,6 +111,32 @@ It checks relative `FileOutputStream` and NIO access, Java absolute/canonical pa
 explicit subprocess inheritance. The real warm fixtures exercise relative I/O
 and inherited subprocess context too.
 
+## Cancellation protocol
+
+The worker reads protocol messages independently of its serial handler thread.
+A cancellation message interrupts the matching running handler once; repeated,
+late, and unknown cancellations never produce extra responses. A cancelled queued
+request skips its handler. Each accepted work request still receives exactly one
+response. Cancellation responses preserve the request ID, set `was_cancelled`,
+and leave output and exit status empty. Request ID zero remains singleplex; positive
+IDs can queue but handlers still dispatch serially.
+
+Cancellation retires the affected reusable child. The coordinator waits for bounded
+child-exit cleanup before returning, including during FIFO startup and fresh-child
+execution. Interruption cannot skip that exit wait, and the handler thread clears
+its cancellation status before the next request. Other warm children remain in the
+pool. EOF finishes accepted requests and then closes retained children.
+
+`CancellationTest` cancels a real JUnit suite that deliberately never returns,
+requires its child PID to disappear before acknowledgement, and then proves two
+new suites share a replacement JVM. It also cancels a fresh child and a driver
+blocked before FIFO connection, requiring the replacement JVM's dispatch and warm
+static counters to survive both operations. Protocol tests cover queued, duplicate,
+late, and unknown cancellation. This implements the worker message contract;
+Bazel's cancellation routing and sandbox integration need separate validation
+before advertising the capability generally. Parallel handler dispatch remains
+future work.
+
 ## Reproducing child reuse
 
 Run the integration rig from a Linux environment that can execute the custom Bazel
@@ -213,3 +239,23 @@ The helper supports the directory-cache layouts exercised by JDKs 8, 21, and 25.
 The proof rig now applies this repo's test-specific build options during its build
 phase too, avoiding unnecessary C++ dependency rebuilds between build and test.
 Concurrency, cancellation, coverage, and performance measurements remain next.
+
+## Cancellation acceptance evidence
+
+The next 2026-10-09 run passed all eighteen worker and runfiles regression targets
+on JDK 8, including the new cancellation regression and four protocol unit cases.
+All six targeted JDK 21 checks passed too. The JDK 8 cancellation regression retired
+warm child PID `82705` in about one second, then retained replacement child PID
+`82740` across four passing dispatches with increasing warm static counters.
+Fresh-child and FIFO-startup cancellation completed in a few milliseconds. In every
+case the regression checked that the cancelled PID had disappeared before receiving
+an empty cancellation response, and checked final pooled-child cleanup at EOF.
+
+Bazel's three existing collection suites still shared child PID `74897` and startup
+token `7b2eca10-5eda-4dc0-a277-76505e3f13d0` across 22 passing cases on JDK 25.
+Copied JDK 8 and JDK 21 logs, XML, the native Bazel logs, and its `summary.json` are
+in `/tmp/rules-java-cancellation-proof`.
+
+The next steps are parallel dispatch with exclusive child leases and bounded pool
+capacity, validating Bazel's cancellation/sandbox routing, then coverage and
+performance measurements. Cancellation capability is not yet advertised by default.

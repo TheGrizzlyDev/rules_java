@@ -32,6 +32,10 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Runs a {@link WorkHandler} either as a persistent worker (Bazel proto protocol on stdin/stdout)
@@ -39,7 +43,8 @@ import java.util.Map;
  * before {@code --}: if present, every other argv element becomes a sticky prefix prepended to each
  * {@link WorkRequest}'s arguments before dispatch to the handler.
  *
- * <p>Singleplex only; multiplexing and cancellation are not yet implemented.
+ * <p>Handlers execute serially. A separate protocol reader accepts cancellation while a handler is
+ * running; interrupted handlers must release their resources before returning.
  */
 public final class PersistentWorker {
 
@@ -71,7 +76,7 @@ public final class PersistentWorker {
   }
 
   private static void workerLoop(List<String> stickyPrefix, WorkHandler handler)
-      throws IOException {
+      throws IOException, InterruptedException {
     // The real stdout is the protocol channel. Anything the handler writes to System.out via
     // library code would corrupt the wire, so we swap System.out and System.err with capture
     // streams for the duration of the loop.
@@ -89,21 +94,111 @@ public final class PersistentWorker {
     }
     System.setOut(capturedStream);
     System.setErr(capturedStream);
+    Map<Integer, RequestTask> pending = new HashMap<>();
+    AtomicReference<IOException> writeFailure = new AtomicReference<>();
+    ExecutorService executor =
+        Executors.newSingleThreadExecutor(
+            runnable -> {
+              Thread thread = new Thread(runnable, "persistent-worker-request");
+              thread.setDaemon(true);
+              return thread;
+            });
+    boolean drained = false;
     try {
       while (true) {
         WorkRequest request = WorkRequest.parseDelimitedFrom(in);
         if (request == null) {
-          return; // EOF, clean shutdown.
+          break;
         }
-        // TODO: honor request.cancel and request.request_id for multiplexing/cancellation.
-        WorkResponse response = handle(handler, request, stickyPrefix, captured, capturedStream);
-        response.writeDelimitedTo(protocolOut);
-        protocolOut.flush();
+        if (writeFailure.get() != null) {
+          throw writeFailure.get();
+        }
+        synchronized (pending) {
+          if (request.getCancel()) {
+            RequestTask task = pending.get(request.getRequestId());
+            if (task != null && !task.cancelled) {
+              task.cancelled = true;
+              if (task.thread != null) {
+                task.thread.interrupt();
+              }
+            }
+            // Unknown, duplicate, and late cancellation never produce responses.
+            continue;
+          }
+          if (pending.containsKey(request.getRequestId())
+              || (!pending.isEmpty() && (request.getRequestId() == 0 || pending.containsKey(0)))) {
+            throw new IOException("Overlapping or duplicate singleplex request ID");
+          }
+          RequestTask task = new RequestTask();
+          pending.put(request.getRequestId(), task);
+          executor.execute(
+              () -> {
+                boolean run;
+                synchronized (pending) {
+                  task.thread = Thread.currentThread();
+                  run = !task.cancelled;
+                }
+                WorkResponse response =
+                    run ? handle(handler, request, stickyPrefix, captured, capturedStream) : null;
+                synchronized (pending) {
+                  // Cancellation and completion share this lock. An interrupt cannot land
+                  // on the next request after this task releases its executor thread.
+                  task.thread = null;
+                  Thread.interrupted();
+                  if (task.cancelled) {
+                    response =
+                        WorkResponse.newBuilder()
+                            .setRequestId(request.getRequestId())
+                            .setWasCancelled(true)
+                            .build();
+                  }
+                  try {
+                    response.writeDelimitedTo(protocolOut);
+                    protocolOut.flush();
+                  } catch (IOException e) {
+                    writeFailure.compareAndSet(null, e);
+                  } finally {
+                    pending.remove(request.getRequestId());
+                  }
+                }
+              });
+        }
+      }
+      // Preserve the existing EOF behavior: finish already accepted requests.
+      executor.shutdown();
+      while (!executor.awaitTermination(1, TimeUnit.SECONDS)) {}
+      drained = true;
+      if (writeFailure.get() != null) {
+        throw writeFailure.get();
       }
     } finally {
+      if (!drained) {
+        synchronized (pending) {
+          for (RequestTask task : pending.values()) {
+            task.cancelled = true;
+            if (task.thread != null) {
+              task.thread.interrupt();
+            }
+          }
+        }
+        executor.shutdownNow();
+        // Interrupt-aware handlers get a bounded opportunity to clean up.
+        try {
+          executor.awaitTermination(5, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+          Thread.currentThread().interrupt();
+        }
+      }
       System.setOut(originalOut);
       System.setErr(originalErr);
+      capturedStream.close();
     }
+  }
+
+  private static final class RequestTask {
+    // Guarded by the pending-request map monitor.
+    boolean cancelled;
+    Thread thread;
   }
 
   private static WorkResponse handle(
