@@ -278,3 +278,13 @@ java_test(
         "@com_google_protobuf//java/core",
     ],
 )
+
+java_test(
+    name = "BazelCancellationFixture",
+    size = "small",
+    srcs = ["BazelCancellationFixture.java"],
+    test_class = "com.google.devtools.build.java.testrunner.BazelCancellationFixture",
+    tags = ["manual", "supports-worker-cancellation"],
+    target_compatible_with = ["@platforms//os:linux"],
+    deps = ["@bazel_tools//tools/jdk:TestRunner"],
+)
