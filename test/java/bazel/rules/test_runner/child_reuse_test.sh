@@ -74,6 +74,8 @@ if group == 'rules_java':
         states.append(match.groups())
         context = re.search(r'RUNFILES_CONTEXT expected=(first|second) retained=(\d+)', output)
         assert context, f'Missing per-target runfiles proof: {output}'
+        process = re.search(r'PROCESS_CONTEXT cwd=.+ marker=(first|second)', output)
+        assert process, f'Missing relative I/O and inherited subprocess proof: {output}'
     assert len({token for token, _ in states}) == 1, states
     assert sorted(int(count) for _, count in states) == [1, 2], states
 summary = proof / 'summary.json'
@@ -90,10 +92,12 @@ targets=(
   //test/java/bazel/rules/test_runner:WarmReuseSecond
   //test/java/bazel/rules/test_runner/wire:CodecTest
 )
-"$bazel" --batch build "${targets[@]}" "${common[@]}" --jobs=4 > "$proof/rules_java.build.log" 2>&1 || {
+# Match this repo's test-only options during build to retain the tool action cache.
+repo_settings=(--nointerface_shared_objects --incompatible_java_info_merge_runtime_module_flags)
+"$bazel" --batch build "${targets[@]}" "${common[@]}" "${repo_settings[@]}" --jobs=4 > "$proof/rules_java.build.log" 2>&1 || {
   tail -n 100 "$proof/rules_java.build.log"; exit 1
 }
-"$bazel" --batch test "${targets[@]}" "${common[@]}" \
+"$bazel" --batch test "${targets[@]}" "${common[@]}" "${repo_settings[@]}" \
   --jobs=1 --nocache_test_results --test_output=errors >> "$proof/rules_java.build.log" 2>&1 || {
   tail -n 100 "$proof/rules_java.build.log"; exit 1
 }

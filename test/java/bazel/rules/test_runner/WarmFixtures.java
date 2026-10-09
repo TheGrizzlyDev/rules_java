@@ -15,6 +15,7 @@ package com.google.devtools.build.java.testrunner;
 
 import com.google.devtools.build.runfiles.Runfiles;
 import java.io.File;
+import java.io.FileOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Paths;
@@ -46,6 +47,7 @@ public final class WarmFixtures {
     }
     System.setProperty("warm.proof.state", "retained");
     System.out.println("WARM_STATE marker=" + marker + " token=" + token + " count=" + executions);
+    checkProcessContext();
     String expected = System.getenv("TEST_RUNFILES_EXPECTED");
     if (expected != null) {
       if (System.getenv("TEST_RUNFILES_SOURCE_REPO") == null) {
@@ -127,6 +129,90 @@ public final class WarmFixtures {
               + " manifest="
               + System.getenv("RUNFILES_MANIFEST_FILE"));
     }
+  }
+
+  private static void checkProcessContext() throws Exception {
+    String expected = System.getenv("TEST_CONTEXT_CWD");
+    if (expected == null) {
+      expected = System.getProperty("user.dir");
+      if (System.getProperty("bazel.persistent.reusable_child") != null
+          && System.getenv("TEST_SRCDIR") != null) {
+        java.nio.file.Path tree =
+            Paths.get(System.getenv("TEST_SRCDIR"))
+                .resolve(
+                    System.getenv("TEST_WORKSPACE") == null ? "" : System.getenv("TEST_WORKSPACE"));
+        if (Files.isDirectory(tree)) {
+          expected = tree.toString();
+        }
+      }
+    }
+    java.nio.file.Path cwd = Paths.get(expected).toRealPath();
+    if (!cwd.equals(Paths.get(System.getProperty("user.dir")).toRealPath())
+        || !cwd.equals(new File(".").getCanonicalFile().toPath())
+        || !cwd.equals(Paths.get("").toAbsolutePath().toRealPath())
+        || !cwd.equals(Paths.get(System.getenv("PWD")).toRealPath())
+        || !cwd.equals(Paths.get("/proc/self/cwd").toRealPath())) {
+      throw new AssertionError("Java and native working directories differ from " + cwd);
+    }
+    String name = "context-" + UUID.randomUUID() + ".txt";
+    java.nio.file.Path absolute = cwd.resolve(name);
+    try {
+      try (FileOutputStream output = new FileOutputStream(name)) {
+        output.write("relative".getBytes(StandardCharsets.UTF_8));
+      }
+      if (!Files.exists(absolute)
+          || !"relative"
+              .equals(new String(Files.readAllBytes(Paths.get(name)), StandardCharsets.UTF_8))
+          || !absolute.equals(new File(name).getAbsoluteFile().toPath())) {
+        throw new AssertionError("Relative I/O escaped the current working directory");
+      }
+    } finally {
+      Files.deleteIfExists(absolute);
+    }
+    for (boolean explicit : new boolean[] {false, true}) {
+      ProcessBuilder builder =
+          new ProcessBuilder(
+              "/bin/sh",
+              "-c",
+              "printf '%s\\n"
+                  + "' \"$TEST_WARM_MARKER\" \"${TEST_CONTEXT_VALUE-unset}\""
+                  + " \"${TEST_CONTEXT_OPTIONAL-unset}\"; pwd -P");
+      if (explicit) {
+        // Materializing the environment exercises Java's cached native map too.
+        builder.environment();
+      }
+      Process probe = builder.start();
+      try {
+        java.io.ByteArrayOutputStream output = new java.io.ByteArrayOutputStream();
+        byte[] buffer = new byte[1024];
+        int count;
+        while ((count = probe.getInputStream().read(buffer)) != -1) {
+          output.write(buffer, 0, count);
+        }
+        String wanted =
+            (System.getenv("TEST_WARM_MARKER") == null ? "" : System.getenv("TEST_WARM_MARKER"))
+                + "\n"
+                + (System.getenv("TEST_CONTEXT_VALUE") == null
+                    ? "unset"
+                    : System.getenv("TEST_CONTEXT_VALUE"))
+                + "\n"
+                + (System.getenv("TEST_CONTEXT_OPTIONAL") == null
+                    ? "unset"
+                    : System.getenv("TEST_CONTEXT_OPTIONAL"))
+                + "\n"
+                + cwd
+                + "\n";
+        if (!probe.waitFor(5, TimeUnit.SECONDS)
+            || probe.exitValue() != 0
+            || !wanted.equals(output.toString("UTF-8"))) {
+          throw new AssertionError("Wrong inherited process context: " + output.toString("UTF-8"));
+        }
+      } finally {
+        probe.destroyForcibly();
+      }
+    }
+    System.out.println(
+        "PROCESS_CONTEXT cwd=" + cwd + " marker=" + System.getenv("TEST_WARM_MARKER"));
   }
 
   private static void checkRunfile(Runfiles runfiles, String path, String expected)

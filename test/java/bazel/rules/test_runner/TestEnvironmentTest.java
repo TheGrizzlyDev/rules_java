@@ -35,10 +35,14 @@ public final class TestEnvironmentTest {
     Path root = Files.createTempDirectory("test environment ").toAbsolutePath();
     try {
       Path config = root.resolve("config.pb");
-      List<String> lines = new ArrayList<>(Arrays.asList(
-          "path_mode=execroot", "execroot_relative_config=config.pb",
-          "javabin=" + Paths.get(System.getProperty("java.home"), "bin", "java"),
-          "main_class=" + Child.class.getName(), "driver_main=" + JvmDriver.class.getName()));
+      List<String> lines =
+          new ArrayList<>(
+              Arrays.asList(
+                  "path_mode=execroot",
+                  "execroot_relative_config=config.pb",
+                  "javabin=" + Paths.get(System.getProperty("java.home"), "bin", "java"),
+                  "main_class=" + Child.class.getName(),
+                  "driver_main=" + JvmDriver.class.getName()));
       for (String entry : System.getProperty("java.class.path").split(File.pathSeparator)) {
         lines.add("driver_classpath_entry=" + Paths.get(entry).toAbsolutePath());
       }
@@ -58,23 +62,58 @@ public final class TestEnvironmentTest {
       env.put("TEST_SHARD_INDEX", "1");
       env.put("TESTBRIDGE_TEST_ONLY", "filter with spaces");
       Map<String, String> original = new HashMap<>(env);
-      Constructor<PersistentTestRunner> constructor = PersistentTestRunner.class.getDeclaredConstructor();
+      Constructor<PersistentTestRunner> constructor =
+          PersistentTestRunner.class.getDeclaredConstructor();
       constructor.setAccessible(true);
       ByteArrayOutputStream output = new ByteArrayOutputStream();
       try (PrintStream capture = new PrintStream(output, true, "UTF-8")) {
-        int result = constructor.newInstance().handleRequest(
-            Arrays.asList("--config", config.toString(), "--", root.toString()), env, capture, capture);
+        int result =
+            constructor
+                .newInstance()
+                .handleRequest(
+                    Arrays.asList("--config", config.toString(), "--", root.toString()),
+                    env,
+                    capture,
+                    capture);
         check(result == 0, output.toString("UTF-8"));
       }
       check(env.equals(original), "Setup mutated the request environment");
       check(output.toString("UTF-8").contains("PASS child setup"), output.toString("UTF-8"));
       check(Files.exists(root.resolve("outputs/results.xml")), "Missing XML output");
       check(Files.exists(root.resolve("sharding/status")), "Missing shard status");
-      check(Files.exists(root.resolve("outputs/undeclared/result.txt")), "Missing undeclared output");
+      check(
+          Files.exists(root.resolve("outputs/undeclared/result.txt")), "Missing undeclared output");
       check(Files.exists(root.resolve("outputs/annotations/result.txt")), "Missing annotation");
-      check(!TestEnvironment.prepare(new HashMap<>(), root).containsKey("TEST_TMPDIR"),
+      check(
+          !TestEnvironment.prepare(new HashMap<>(), root).containsKey("TEST_TMPDIR"),
           "An absent temp directory became an execution-root path");
-      System.out.println("PASS relative paths, directory setup, Bazel marker, and request isolation");
+      Map<String, String> context = new HashMap<>();
+      context.put("TEST_SRCDIR", "runfiles");
+      context.put("TEST_WORKSPACE", "workspace");
+      Path workspace = root.resolve("runfiles/workspace");
+      Files.createDirectories(workspace);
+      check(
+          workspace.equals(TestEnvironment.workingDirectory(context, root)),
+          "Directory tests did not enter their workspace");
+      context.put("RUNTEST_PRESERVE_CWD", "1");
+      check(root.equals(TestEnvironment.workingDirectory(context, root)), "Preserved cwd changed");
+      context.remove("RUNTEST_PRESERVE_CWD");
+      context.put("COVERAGE_DIR", "coverage");
+      check(root.equals(TestEnvironment.workingDirectory(context, root)), "Coverage cwd changed");
+      context.remove("COVERAGE_DIR");
+      context.put("TEST_SRCDIR", "missing.runfiles");
+      try {
+        TestEnvironment.workingDirectory(context, root);
+        throw new AssertionError("Missing directory tree was silently accepted");
+      } catch (java.io.IOException expected) {
+        // Missing directory-mode runfiles are a request failure.
+      }
+      context.put("RUNFILES_MANIFEST_ONLY", "1");
+      check(
+          root.equals(TestEnvironment.workingDirectory(context, root)),
+          "Manifest-only execution did not use the execution root");
+      System.out.println(
+          "PASS relative paths, directory setup, request isolation, and cwd selection");
     } finally {
       try (Stream<Path> files = Files.walk(root)) {
         for (Path path : (Iterable<Path>) files.sorted(Comparator.reverseOrder())::iterator) {
@@ -100,19 +139,24 @@ public final class TestEnvironmentTest {
       for (String name : Arrays.asList("TEST_SRCDIR", "JAVA_RUNFILES", "RUNFILES_DIR")) {
         check(root.resolve("runfiles").equals(Paths.get(System.getenv(name))), "Wrong " + name);
       }
-      check(root.resolve("runfiles/MANIFEST").equals(Paths.get(System.getenv("RUNFILES_MANIFEST_FILE"))),
+      check(
+          root.resolve("runfiles/MANIFEST")
+              .equals(Paths.get(System.getenv("RUNFILES_MANIFEST_FILE"))),
           "Wrong runfiles manifest path");
       Path tmpdir = root.resolve("work/tmp");
       check(tmpdir.equals(Paths.get(System.getenv("TEST_TMPDIR"))), "Wrong TEST_TMPDIR");
       check(tmpdir.equals(Paths.get(System.getenv("GTEST_TMP_DIR"))), "Wrong GTEST_TMP_DIR");
-      check(tmpdir.equals(Paths.get(System.getProperty("java.io.tmpdir"))), "Wrong JVM temp directory");
+      check(
+          tmpdir.equals(Paths.get(System.getProperty("java.io.tmpdir"))),
+          "Wrong JVM temp directory");
       Path temporary = Files.createTempFile("setup-", ".tmp");
       check(temporary.getParent().equals(tmpdir), "Temporary file escaped test directory");
       Files.delete(temporary);
       for (String name : Arrays.asList("XML_OUTPUT_FILE", "TEST_SHARD_STATUS_FILE")) {
         Files.write(Paths.get(System.getenv(name)), new byte[0]);
       }
-      for (String name : Arrays.asList("TEST_UNDECLARED_OUTPUTS_DIR", "TEST_UNDECLARED_OUTPUTS_ANNOTATIONS_DIR")) {
+      for (String name :
+          Arrays.asList("TEST_UNDECLARED_OUTPUTS_DIR", "TEST_UNDECLARED_OUTPUTS_ANNOTATIONS_DIR")) {
         Files.write(Paths.get(System.getenv(name)).resolve("result.txt"), new byte[0]);
       }
       System.out.println("PASS child setup");

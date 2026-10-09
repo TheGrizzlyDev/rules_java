@@ -29,7 +29,6 @@ import com.google.devtools.build.java.testrunner.wire.WorkerStart;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.io.PrintStream;
-import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.net.URL;
@@ -42,7 +41,6 @@ import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.BlockingQueue;
@@ -116,7 +114,7 @@ final class ReusableTestDriver {
         }
         // Only the supplied execution metadata changes; other properties and
         // application state deliberately survive the preceding test.
-        updateEnvironment(request.environment);
+        NativeTestContext.apply(request.environment, request.properties.get("user.dir"));
         request.properties.forEach(System::setProperty);
         // Runfiles metadata belongs to this dispatch. Retained Runfiles objects
         // keep their original context; new preload calls use the current one.
@@ -189,18 +187,6 @@ final class ReusableTestDriver {
       method.setAccessible(true);
       return (Integer) method.invoke(null, System.getProperty("bazel.test_suite"), arguments);
     }
-  }
-
-  @SuppressWarnings("unchecked")
-  private static void updateEnvironment(Map<String, String> environment) throws Exception {
-    // Bazel's JUnit runner and existing tests read System.getenv directly. On
-    // modular JDKs the coordinator opens java.util for this narrow operation.
-    // This updates Java's view; it does not change native-library getenv/cwd.
-    Field backing = System.getenv().getClass().getDeclaredField("m");
-    backing.setAccessible(true);
-    Map<String, String> values = (Map<String, String>) backing.get(System.getenv());
-    values.clear();
-    values.putAll(environment);
   }
 
   private static PrintStream wireOutput(WireChannel channel, boolean stderr) throws IOException {

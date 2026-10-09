@@ -26,7 +26,7 @@ retain the original target's runfiles context and resolve its paths for each req
    pass, fail, pass sequence. Run the proof in rules_java and on a subset of Bazel's
    existing Java tests. Capture results and XML separately for each request.
 3. Verify jar digest compatibility and invalidation when jars change. Complete
-   per-request runfiles handling.
+   per-request runfiles and native execution-context handling.
 4. Complete store failure propagation, pool cleanup, concurrency, cancellation,
    coverage, and performance measurements.
 
@@ -35,7 +35,7 @@ tests, rather than inference from coordinator reuse or passing tests alone.
 
 ## Current execution scope
 
-The retained child path supports the standard Bazel JUnit runner. Arbitrary main
+The retained child path supports the standard Bazel JUnit runner on Linux. Arbitrary main
 classes, debugging, main advice, and coverage currently use the existing fresh
 child path. The coordinator uses the public returning `BazelTestRunner.runTests`
 entry when available; an adapter calls `runTestsInSuite` in older runner jars.
@@ -46,11 +46,9 @@ jars whose classes may not have loaded yet. Different suites and compatible adde
 jars can share it. A changed digest causes the stale child to shut down and a new
 child to start. Failed or missing digest reads never count as a matching digest.
 
-Only runner-owned metadata changes between requests: suite, environment, temporary
-directory, and output destinations. Java's environment view is updated so existing
-JUnit code can read the current filter, shard, and XML path through `System.getenv`.
-Modular JDKs require opening `java.util` for that operation. Native-library `getenv`
-and working-directory changes remain separate work. General JVM state is retained.
+Only runner-owned metadata changes between requests: suite, environment, working
+and temporary directories, and output destinations. Both Java and native code see
+the current environment. General JVM state is retained.
 
 ## Per-request runfiles
 
@@ -78,8 +76,40 @@ target, old retained objects still resolve their original data, a rewritten mani
 is reloaded, subprocesses resolve data using `Runfiles.getEnvVars()`, and the same
 child survives five dispatches before jar invalidation. The real warm fixture
 targets also read distinct `data` dependencies through the
-current runfiles object. Native-library working directories and native `getenv`
-remain separate work; this step supports explicit Java runfiles lookups.
+current runfiles object. The native execution-context handling below extends this
+to relative I/O and subprocesses that inherit their environment implicitly.
+
+## Native execution context
+
+The driver embeds a Linux JNI library in its bootstrap jar. The jar's existing
+SHA-256 compatibility check therefore also validates the native implementation.
+The library is extracted once per child, loaded, and immediately unlinked. Before
+each suite, it changes the process directory and replaces libc's environment with
+the prepared request environment. Removed variables disappear from both native
+and Java views. Subprocesses inherit the current context whether or not the caller
+materializes `ProcessBuilder.environment()`.
+
+Directory-mode tests run in `TEST_SRCDIR/TEST_WORKSPACE`. A missing directory is a
+request failure. Manifest-only tests without a physical workspace use the execution
+root and resolve logical data paths through the runfiles library. Requests preserving
+the working directory, coverage requests, and requests without `TEST_SRCDIR` use the
+execution root. The coordinator sends that absolute directory as runner-owned
+`user.dir` metadata and refreshes `PWD`. The driver also updates Java's cached `java.io` and NIO default
+directories, so relative file operations and absolute-path resolution agree with
+native `getcwd`. Modular JDKs open `java.util`, `java.io`, and `sun.nio.fs` for these
+narrow metadata updates. Java 8 reads `user.dir` directly in `java.io`.
+
+A context-update failure prevents suite execution and retires the child. These
+updates are process-wide and suites dispatch serially within each child. Retained
+application threads observe the current execution context; their state stays warm.
+Other operating systems use the existing fresh-child path.
+
+`ChildReuseTest` changes physical workspaces across dispatches, preserves the
+execution root for one request, and alternates directory and manifest contexts.
+It checks relative `FileOutputStream` and NIO access, Java absolute/canonical paths,
+`/proc/self/cwd`, removed variables, Unicode environment values, and implicit and
+explicit subprocess inheritance. The real warm fixtures exercise relative I/O
+and inherited subprocess context too.
 
 ## Reproducing child reuse
 
@@ -162,5 +192,24 @@ directory.
 The ordered regression kept child PID `2104138` across five runfiles contexts,
 including a failed suite and a rewritten manifest, then started child PID
 `2104293` after a jar digest changed. This step validates explicit Java runfiles
-lookups and subprocess propagation. Native working directories, native `getenv`,
-concurrency, cancellation, and coverage remain later work.
+lookups and subprocess propagation. At that milestone, native working directories, native `getenv`, concurrency,
+cancellation, and coverage remained later work.
+
+## Native execution-context acceptance evidence
+
+The 2026-10-09 follow-up passed all seventeen worker and runfiles regressions on
+JDK 8. Four targeted tests also passed on JDK 21: ordered child reuse, working-directory
+selection, and both real warm fixtures. The three standalone proof targets passed
+with persistent workers disabled.
+
+The updated cross-repository proof retained child PID `22548` across the three
+rules_java targets (23 passing cases) and child PID `24343` across Bazel's three
+collection targets on JDK 25 (22 passing cases). The fixture logs verify relative
+I/O, current `PWD`, and implicit and explicit subprocess inheritance alongside
+retained classloader state. Logs, XML, `summary.json`, and copied JDK 8 and JDK 21
+ordered-dispatch results are in `/tmp/rules-java-jvm-reuse.YKhDrU`.
+
+The helper supports the directory-cache layouts exercised by JDKs 8, 21, and 25.
+The proof rig now applies this repo's test-specific build options during its build
+phase too, avoiding unnecessary C++ dependency rebuilds between build and test.
+Concurrency, cancellation, coverage, and performance measurements remain next.

@@ -163,6 +163,7 @@ public final class PersistentTestRunner {
     }
     if (config.mainClass.equals("com.google.testing.junit.runner.BazelTestRunner")
         && config.driverMain.equals("com.google.devtools.build.java.testrunner.JvmDriver")
+        && System.getProperty("os.name").equals("Linux")
         && config.coverageMainClass == null
         && wrapperArgs.mainAdvice == null
         && wrapperArgs.mainAdviceClasspath == null
@@ -390,6 +391,13 @@ public final class PersistentTestRunner {
       properties.put("java.io.tmpdir", environment.get("TEST_TMPDIR"));
     }
     List<String> driverClasspath = classpath.subList(0, config.driverClasspath.size());
+    properties.put(
+        "user.dir",
+        TestEnvironment.workingDirectory(
+                environment, config.execPaths ? config.execRoot : Paths.get("").toAbsolutePath())
+            .toString());
+    environment = new java.util.HashMap<>(environment);
+    environment.put("PWD", properties.get("user.dir"));
     List<String> testClasspath = classpath.subList(config.driverClasspath.size(), classpath.size());
     StringBuilder key = new StringBuilder(Paths.get(javabin).toRealPath().toString());
     for (String flag : flags) {
@@ -440,8 +448,19 @@ public final class PersistentTestRunner {
       }
       String runtime =
           new String(Files.readAllBytes(release), java.nio.charset.StandardCharsets.UTF_8);
-      if (!runtime.contains("JAVA_VERSION=\"1.8.")) {
+      java.util.regex.Matcher version =
+          java.util.regex.Pattern.compile("JAVA_VERSION=\"(?:1\\.)?(\\d+)").matcher(runtime);
+      if (!version.find()) {
+        throw new IOException("Cannot determine Java runtime version from " + release);
+      }
+      int runtimeMajor = Integer.parseInt(version.group(1));
+      if (runtimeMajor >= 9) {
         command.add("--add-opens=java.base/java.util=ALL-UNNAMED");
+        command.add("--add-opens=java.base/java.io=ALL-UNNAMED");
+        command.add("--add-opens=java.base/sun.nio.fs=ALL-UNNAMED");
+        if (runtimeMajor >= 17) {
+          command.add("--enable-native-access=ALL-UNNAMED");
+        }
       }
       command.add("-Dbazel.persistent.reusable_child=true");
       if (extensionsFile != null) {

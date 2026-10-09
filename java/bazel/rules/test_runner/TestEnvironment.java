@@ -26,6 +26,29 @@ import java.util.Map;
 final class TestEnvironment {
   private TestEnvironment() {}
 
+  static Path workingDirectory(Map<String, String> environment, Path execRoot) throws IOException {
+    Path root = execRoot.toAbsolutePath().normalize();
+    if (!environment.getOrDefault("RUNTEST_PRESERVE_CWD", "").isEmpty()
+        || !environment.getOrDefault("COVERAGE_DIR", "").isEmpty()
+        || environment.getOrDefault("TEST_SRCDIR", "").isEmpty()) {
+      return root;
+    }
+    Path directory = root.resolve(environment.get("TEST_SRCDIR"));
+    String workspace = environment.getOrDefault("TEST_WORKSPACE", "");
+    if (!workspace.isEmpty()) {
+      directory = directory.resolve(workspace);
+    }
+    // A manifest describes logical paths without providing a physical tree.
+    // Explicit runfiles lookups remain available; relative I/O uses the execroot.
+    if (!Files.isDirectory(directory) && "1".equals(environment.get("RUNFILES_MANIFEST_ONLY"))) {
+      return root;
+    }
+    if (!Files.isDirectory(directory)) {
+      throw new IOException("Test working directory does not exist: " + directory);
+    }
+    return directory.normalize();
+  }
+
   static Map<String, String> prepare(Map<String, String> source, Path execRoot) throws IOException {
     Map<String, String> environment = new HashMap<>(source);
     environment.put("BAZEL_TEST", "1");

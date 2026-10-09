@@ -54,6 +54,7 @@ public final class ChildReuseTest {
     ProcessBuilder builder = new ProcessBuilder(command);
     builder.environment().remove("TEST_WARM_MARKER");
     builder.environment().remove("TEST_RUNFILES_EXPECTED");
+    builder.environment().remove("TEST_CONTEXT_OPTIONAL");
     builder.redirectError(root.resolve("coordinator.log").toFile());
     Process process = builder.start();
     ExecutorService reader = Executors.newSingleThreadExecutor();
@@ -125,6 +126,22 @@ public final class ChildReuseTest {
           environment.put("XML_OUTPUT_FILE", xml.toString());
           environment.put("TEST_TMPDIR", root.resolve("tmp-" + i).toString());
           prepareRunfiles(root, i, environment);
+          environment.put("TEST_CONTEXT_VALUE", "request-" + i + " café 🦊 = value");
+          if (i % 2 == 0) {
+            environment.put("TEST_CONTEXT_OPTIONAL", "present-" + i);
+          }
+          if (i == 2) {
+            environment.put("RUNTEST_PRESERVE_CWD", "1");
+          } else {
+            environment.put("RUNTEST_PRESERVE_CWD", "");
+          }
+          environment.put("TEST_WORKSPACE", "workspace");
+          Path cwd = root.resolve("request-" + i + ".runfiles/workspace");
+          Files.createDirectories(cwd);
+          if (i == 1 || i == 2 || i == 3) {
+            cwd = Paths.get("").toAbsolutePath();
+          }
+          environment.put("TEST_CONTEXT_CWD", cwd.toString());
           for (Map.Entry<String, String> entry : environment.entrySet()) {
             request.addRepeatedField(
                 envField,
@@ -216,8 +233,9 @@ public final class ChildReuseTest {
       process.getOutputStream().close();
       if (envField != null) {
         System.out.println(
-            "PASS directory and manifest contexts, changed repository mappings, retained objects, "
-                + "rewritten manifest, and subprocess runfiles across five warm dispatches");
+            "PASS directory and manifest contexts, changed repository mappings, retained objects,"
+                + " rewritten manifest, relative I/O, native environment, and subprocess context"
+                + " across five warm dispatches");
       }
       check(
           process.waitFor(10, TimeUnit.SECONDS) && process.exitValue() == 0,

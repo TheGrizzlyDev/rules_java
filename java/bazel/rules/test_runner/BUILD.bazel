@@ -13,6 +13,7 @@
 # limitations under the License.
 load("//java:defs.bzl", "java_binary", "java_library")
 load("//java/bazel/rules:jvm_test_info.bzl", "jvm_persistent_test_runner_info")
+load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
 
 package(default_applicable_licenses = ["@rules_java//:license"])
 
@@ -47,12 +48,25 @@ java_library(
 
 java_library(
     name = "jvm_driver",
-    srcs = ["JvmDriver.java", "ReusableTestDriver.java"],
+    srcs = ["JvmDriver.java", "NativeTestContext.java", "ReusableTestDriver.java"],
+    resources = select({
+        "@bazel_tools//src/conditions:linux": [":libtest_context.so"],
+        "//conditions:default": [],
+    }),
+    resource_strip_prefix = "java/bazel/rules/test_runner",
     visibility = ["//visibility:public"],
     deps = [
         "//java/bazel/rules/test_runner/extension",
         "//java/bazel/rules/test_runner/wire",
     ],
+)
+
+cc_binary(
+    name = "libtest_context.so",
+    srcs = ["native_test_context.cc"],
+    linkshared = True,
+    target_compatible_with = ["@platforms//os:linux"],
+    deps = ["//toolchains:jni"],
 )
 
 java_binary(
