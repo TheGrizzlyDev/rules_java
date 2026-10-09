@@ -60,6 +60,20 @@ final class JvmPool {
     gcExcessIdle();
   }
 
+  synchronized void close() {
+    for (JvmProcess jvm : jvms) {
+      jvm.process.destroyForcibly();
+    }
+    boolean interrupted = false;
+    for (JvmProcess jvm : jvms) {
+      interrupted |= ReusableJvm.waitForExit(jvm.process, 1000);
+    }
+    jvms.clear();
+    if (interrupted) {
+      Thread.currentThread().interrupt();
+    }
+  }
+
   private void gcExcessIdle() {
     reapDead();
     while (jvms.size() > capacity) {

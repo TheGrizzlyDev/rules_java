@@ -504,6 +504,7 @@ public final class PersistentTestRunner {
       child.close();
     }
     reusableChildren.clear();
+    pool.close();
   }
 
   private static long remainingNanos(long started, long budget) {

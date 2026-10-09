@@ -114,6 +114,9 @@ public final class CancellationTest {
           "Recovered pooled child survived coordinator EOF");
       System.out.println(
           "PASS cancellation responses were empty and unique; pooled child cleaned up at EOF");
+      for (boolean startupHang : new boolean[] {false, true}) {
+        terminationCleanup(builder, reader, root, marker, children, startupHang);
+      }
     } finally {
       coordinator.destroy();
       if (!coordinator.waitFor(3, TimeUnit.SECONDS)) {
@@ -135,6 +138,55 @@ public final class CancellationTest {
           Files.deleteIfExists(path);
         }
       }
+    }
+  }
+
+  private static void terminationCleanup(
+      ProcessBuilder builder,
+      ExecutorService reader,
+      Path root,
+      Path marker,
+      Set<String> children,
+      boolean startupHang)
+      throws Exception {
+    String phase = startupHang ? "terminated-startup" : "terminated-legacy";
+    builder.redirectError(root.resolve(phase + ".log").toFile());
+    Process coordinator = builder.start();
+    try {
+      String warm =
+          run(coordinator, reader, config(root, marker, "First", null, null), root, phase, 1);
+      children.add(warm);
+      Files.deleteIfExists(marker);
+      send(
+          coordinator,
+          request(
+              config(
+                  root,
+                  marker,
+                  phase,
+                  LegacyHang.class.getName(),
+                  startupHang ? BootstrapHang.class.getName() : null),
+              root,
+              phase));
+      long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+      while ((!Files.isRegularFile(marker) || Files.size(marker) == 0)
+          && System.nanoTime() < deadline) {
+        Thread.sleep(10);
+      }
+      check(Files.isRegularFile(marker), "Child did not reach " + phase);
+      String fresh = new String(Files.readAllBytes(marker), StandardCharsets.UTF_8).trim();
+      children.add(fresh);
+      check(
+          fresh.matches("[0-9]+") && Files.exists(Paths.get("/proc", fresh)), "Invalid child PID");
+      coordinator.destroy();
+      check(coordinator.waitFor(5, TimeUnit.SECONDS), "Terminated coordinator did not exit");
+      check(
+          !Files.exists(Paths.get("/proc", fresh)), "Fresh child survived coordinator termination");
+      check(!Files.exists(Paths.get("/proc", warm)), "Warm child survived coordinator termination");
+      System.out.println("PASS " + phase + " reaped warm PID " + warm + " and fresh PID " + fresh);
+    } finally {
+      coordinator.destroyForcibly();
+      coordinator.waitFor(3, TimeUnit.SECONDS);
     }
   }
 
