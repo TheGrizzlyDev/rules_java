@@ -27,8 +27,30 @@ retain the original target's runfiles context and resolve its paths for each req
    existing Java tests. Capture results and XML separately for each request.
 3. Verify jar digest compatibility and invalidation when jars change. Complete
    per-request runfiles and native execution-context handling.
-4. Complete store failure propagation, pool cleanup, concurrency, cancellation,
-   coverage, and performance measurements.
+4. Validate actual Bazel timeout and interruption routing through worker cancellation
+   and sandbox execution, including child cleanup and subsequent worker recovery.
+5. Run a small performance comparison against ordinary Bazel test execution.
+6. Validate coverage in the existing fresh-child path, then support per-request
+   coverage collection in retained JVMs.
+
+Parallel dispatch is deferred until multiplex persistent test workers are supported.
+The provider currently declares `multiplex = False`, so Bazel sends one active test
+request per coordinator. Multiple coordinators can already execute concurrently.
+Exclusive child leases and concurrent pool scheduling belong to that future milestone.
+
+Keep the benchmark small: use a few short existing Bazel Java test targets, with
+the same Bazel binary, JDK, targets, and execution concurrency for both strategies.
+Compare ordinary standalone execution with persistent execution after building the
+inputs and warming Bazel's server. Disable test-result caching, alternate strategy
+order over a few repetitions, and report elapsed time and per-test execution times.
+Record cold worker startup separately from runs retaining workers, and check child
+identities to establish that the measured persistent runs actually reused JVMs.
+
+Coverage currently selects a fresh child. Bazel's JaCoCo runner emits its report in
+a JVM shutdown hook, which does not run after each dispatch in a retained child.
+Reuse therefore needs explicit per-request collection and report destinations, plus
+coverage counter reset between requests to avoid attributing earlier tests' hits to
+later tests. This instrumentation reset does not reset warm application state.
 
 The first acceptance milestone is observed reuse of the same child across distinct
 tests, rather than inference from coordinator reuse or passing tests alone.
@@ -256,6 +278,7 @@ token `7b2eca10-5eda-4dc0-a277-76505e3f13d0` across 22 passing cases on JDK 25.
 Copied JDK 8 and JDK 21 logs, XML, the native Bazel logs, and its `summary.json` are
 in `/tmp/rules-java-cancellation-proof`.
 
-The next steps are parallel dispatch with exclusive child leases and bounded pool
-capacity, validating Bazel's cancellation/sandbox routing, then coverage and
-performance measurements. Cancellation capability is not yet advertised by default.
+The next steps are validating Bazel's cancellation/sandbox routing, a small benchmark
+against ordinary Bazel test execution, and coverage validation and reuse support.
+Parallel dispatch is deferred until multiplex persistent test workers are supported.
+Cancellation capability is not yet advertised by default.
