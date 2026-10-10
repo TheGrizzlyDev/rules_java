@@ -58,6 +58,19 @@ public final class WarmFixtures {
     if (!Arrays.equals("café".getBytes(charset), "café".getBytes(StandardCharsets.UTF_8))) {
       throw new AssertionError("Service-provided charset encoded incorrectly");
     }
+    // Default JavaCompiler discovery uses this property, not just loader URLs.
+    java.nio.file.Path fixtureJar =
+        Paths.get(WarmFixtures.class.getProtectionDomain().getCodeSource().getLocation().toURI());
+    boolean compilerCanDiscoverFixture = false;
+    for (String entry : System.getProperty("java.class.path").split(File.pathSeparator)) {
+      java.nio.file.Path candidate = Paths.get(entry);
+      if (Files.exists(candidate) && Files.isSameFile(candidate, fixtureJar)) {
+        compilerCanDiscoverFixture = true;
+      }
+    }
+    if (!compilerCanDiscoverFixture) {
+      throw new AssertionError("Current test jar missing from compiler classpath");
+    }
     checkProcessContext();
     String expected = System.getenv("TEST_RUNFILES_EXPECTED");
     if (expected != null) {

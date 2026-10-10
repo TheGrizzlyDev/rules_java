@@ -313,3 +313,12 @@ java_test(
         "//test/java/com/google/devtools/build/java/testrunner/coverage:fixtures",
     ],
 )
+
+java_test(
+    name = "WarmClassLoaderTest",
+    size = "small",
+    srcs = ["WarmClassLoaderTest.java"],
+    main_class = "com.google.devtools.build.java.testrunner.WarmClassLoaderTest",
+    use_testrunner = False,
+    deps = ["//java/bazel/rules/test_runner:jvm_driver"],
+)

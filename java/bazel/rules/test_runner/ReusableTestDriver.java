@@ -91,6 +91,7 @@ final class ReusableTestDriver {
     System.setErr(wireOutput(channel, true));
     WarmClassLoader loader = (WarmClassLoader) ClassLoader.getSystemClassLoader();
     Thread.currentThread().setContextClassLoader(loader);
+    String bootstrapClasspath = System.getProperty("java.class.path");
     String token = UUID.randomUUID().toString();
     String pid = pid();
     int dispatch = 0;
@@ -105,9 +106,14 @@ final class ReusableTestDriver {
           return;
         }
         TestStart request = (TestStart) next;
-        for (String path : request.classpath) {
-          loader.append(path);
-        }
+        loader.setClasspath(request.classpath);
+        // Compilers and other tools also discover test dependencies through
+        // the conventional system property rather than the loader's URLs.
+        System.setProperty(
+            "java.class.path",
+            bootstrapClasspath
+                + java.io.File.pathSeparator
+                + String.join(java.io.File.pathSeparator, request.classpath));
         // Only the supplied execution metadata changes; other properties and
         // application state deliberately survive the preceding test.
         NativeTestContext.apply(request.environment, request.properties.get("user.dir"));
