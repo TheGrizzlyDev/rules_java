@@ -60,27 +60,39 @@ tests, rather than inference from coordinator reuse or passing tests alone.
 ## Current execution scope
 
 The retained child path supports the standard Bazel JUnit runner on Linux. Arbitrary main
-classes, debugging, and main advice use the existing fresh-child path. Standard
+classes, debugging, main advice, and an explicitly configured system classloader
+use the existing fresh-child path. Standard
 JUnit coverage uses retained children too. The coordinator uses the public returning
 `BazelTestRunner.runTests` entry when available; an adapter calls `runTestsInSuite`
 in older runner jars.
 
-One append-only URL classloader retains the test jars and loaded classes. The
+One append-only URL classloader retains the test jars and loaded classes. It is
+the JVM's system classloader so JDK service discovery, including charset providers,
+can find services in the test jars. Classpath scanners and resource/service
+enumeration see only the current request's jars; previously loaded classes and
+their static state remain warm. This prevents a suite that scans its package from
+discovering unrelated tests attached by an earlier request. The
 compatibility check conservatively fingerprints every attached jar, including
 jars whose classes may not have loaded yet. Different suites and compatible added
 jars can share it. A changed digest causes the stale child to shut down and a new
 child to start. Failed or missing digest reads never count as a matching digest.
 
-The retained loader is the JVM's system classloader, so charset providers and
-instrumentation agents can find test classes. Its instrumentation append hook
-preserves reuse for current test jars and bootstrap jars, matching canonical paths
-so symlink aliases count as the same input. An agent appending any other jar makes
-the child retire after the current test result. The coordinator reaps it before
-another dispatch because it has no validated digest for that added jar.
-
-Only runner-owned metadata changes between requests: suite, environment, working
-and temporary directories, and output destinations. Both Java and native code see
+Only runner-owned metadata changes between requests: suite, environment, classpath,
+working and temporary directories, and output destinations. `java.class.path`
+contains the driver bootstrap jars and current test jars so in-test compiler calls
+use the current dependencies. Both Java and native code see
 the current environment. General JVM state is retained.
+
+Bazel's automatic codec registry treats its defining classpath as an input to its
+generated metadata. It rescans when that classpath changes and retains the cached
+registry when it is unchanged. This is a targeted library adaptation; the runner
+does not clear application static fields or general JVM caches.
+
+The system loader supports the JDK instrumentation append hook used by Mockito's
+inline mock maker. An agent jar already covered by the current request's validated
+classpath can remain warm. Appending an agent jar outside the validated inputs
+retires the child after its result is delivered; the coordinator reaps it before
+the next dispatch. This avoids reusing code whose jar digest it cannot validate.
 
 ## Per-request runfiles
 
@@ -327,6 +339,28 @@ Neither recovery created a new coordinator. Proof logs and XML are in
 All eighteen repository worker regressions passed, and Bazel's `WorkerTests` suite
 passed all 244 cases, including deadline and sandboxed/unsandboxed timeout recovery
 regressions. The native routing change is committed as `25a082a`.
+
+## Classpath and service compatibility validation
+
+The 2026-10-10 full Java-test attempt exposed omitted mock-fixture files, JDK
+service discovery through the wrong loader, accumulated-jar suite discovery, stale
+codec metadata, and the missing instrumentation append hook. Its timings are
+diagnostic, because unrelated tests were discovered in retained JVMs.
+
+After fixing these issues, 19 worker/runfiles regression targets passed. The 11
+affected Bazel targets executed the same 1,656 cases in ordinary and persistent
+modes, and all 11 targets passed in both modes after the final instrumentation
+correction. The separate instrumentation acceptance run passed all 1,480 cases
+in its five affected suites.
+`SerializationTests`, `ExecTests`, `WorkerTests`, and `ActionsTests` shared child
+PID `3249350`, token `edfc304b-a031-4801-84a0-b385bccb6a49`, across dispatches 1–4.
+The root coverage acceptance test also passed four covered dispatches in one child
+while retaining static state and separating each request's probes.
+
+Evidence is saved in `/tmp/rules-java-fix-validation`, `/tmp/instrumentation-proof`,
+`/tmp/rules-java-fixture-validation`, and `/tmp/bazel-codec-cache-proof`. Earlier full
+profiles and execution logs are preserved in
+`/tmp/rules-java-all-java-benchmark/diagnostic-before-fixes`.
 
 ## Small benchmark against ordinary Bazel
 
