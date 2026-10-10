@@ -71,6 +71,22 @@ public final class WarmFixtures {
     if (!compilerCanDiscoverFixture) {
       throw new AssertionError("Current test jar missing from compiler classpath");
     }
+    if (Boolean.getBoolean("bazel.persistent.reusable_child")) {
+      // An agent appending a current validated test jar must leave this JVM reusable.
+      ClassLoader loader = ClassLoader.getSystemClassLoader();
+      loader
+          .getClass()
+          .getMethod("appendToClassPathForInstrumentation", String.class)
+          .invoke(
+              loader,
+              Paths.get(
+                      WarmFixtures.class
+                          .getProtectionDomain()
+                          .getCodeSource()
+                          .getLocation()
+                          .toURI())
+                  .toString());
+    }
     checkProcessContext();
     String expected = System.getenv("TEST_RUNFILES_EXPECTED");
     if (expected != null) {
@@ -272,6 +288,29 @@ public final class WarmFixtures {
     @Test
     public void secondTest() throws Exception {
       exercise("second");
+    }
+  }
+
+  @RunWith(JUnit4.class)
+  public static final class UnknownInstrumentation {
+    @Test
+    public void retiresUnvalidatedAgentJar() throws Exception {
+      exercise("unknown");
+      java.nio.file.Path jar = Files.createTempFile("unknown-agent-", ".jar");
+      try (java.util.jar.JarOutputStream output =
+          new java.util.jar.JarOutputStream(Files.newOutputStream(jar))) {
+        // A dynamically generated agent jar is absent from the validated inputs.
+      }
+      try {
+        ClassLoader loader = ClassLoader.getSystemClassLoader();
+        loader
+            .getClass()
+            .getMethod("appendToClassPathForInstrumentation", String.class)
+            .invoke(loader, jar.toString());
+      } finally {
+        Files.deleteIfExists(jar);
+      }
+      throw new AssertionError("Deliberate failure after appending an unvalidated agent jar");
     }
   }
 

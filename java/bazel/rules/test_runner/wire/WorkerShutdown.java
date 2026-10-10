@@ -14,8 +14,11 @@
 package com.google.devtools.build.java.testrunner.wire;
 
 /**
- * Coordinator → child. Sent once, when the coordinator process is winding down. Signals the
- * child to fire {@code onWorkerShutdown} on all extensions and exit cleanly.
+ * Coordinator → child. Sent once, when the coordinator process is winding down. Signals the child
+ * to fire {@code onWorkerShutdown} on all extensions and exit cleanly.
+ *
+ * <p>A reusable child may send this before its final {@link TestFinished} to announce retirement.
+ * The coordinator preserves that result and reaps the child before another dispatch.
  */
 public final class WorkerShutdown implements Message {
   public static final WorkerShutdown INSTANCE = new WorkerShutdown();

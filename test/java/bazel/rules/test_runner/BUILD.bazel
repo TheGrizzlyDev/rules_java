@@ -322,3 +322,13 @@ java_test(
     use_testrunner = False,
     deps = ["//java/bazel/rules/test_runner:jvm_driver"],
 )
+
+java_test(
+    name = "InstrumentationClassLoaderTest",
+    size = "small",
+    timeout = "short",
+    srcs = ["InstrumentationClassLoaderTest.java"],
+    main_class = "com.google.devtools.build.java.testrunner.InstrumentationClassLoaderTest",
+    use_testrunner = False,
+    deps = ["//java/bazel/rules/test_runner:jvm_driver"],
+)

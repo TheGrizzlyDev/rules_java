@@ -61,6 +61,7 @@ final class ReusableJvm implements AutoCloseable {
   private volatile PrintStream stderr;
   private volatile CompletableFuture<Integer> result;
   private volatile Throwable failure;
+  private volatile boolean retiring;
 
   private ReusableJvm(
       String startupKey,
@@ -162,7 +163,7 @@ final class ReusableJvm implements AutoCloseable {
   }
 
   boolean compatible(String key, List<JvmProcess.ClasspathEntry> requested) throws IOException {
-    if (!startupKey.equals(key) || !process.isAlive() || !reader.isAlive()) {
+    if (!startupKey.equals(key) || retiring || !process.isAlive() || !reader.isAlive()) {
       return false;
     }
     for (Map.Entry<String, String> loaded : jars.entrySet()) {
@@ -204,7 +205,11 @@ final class ReusableJvm implements AutoCloseable {
     }
     channel.send(request);
     try {
-      return finished.get();
+      int exitCode = finished.get();
+      if (retiring) {
+        close();
+      }
+      return exitCode;
     } catch (ExecutionException e) {
       throw new IOException("Reusable child test failed", e.getCause());
     }
@@ -220,6 +225,10 @@ final class ReusableJvm implements AutoCloseable {
         if (message instanceof SessionReady) {
           channel.send(WorkerStart.INSTANCE);
           result.complete(0);
+        } else if (message instanceof WorkerShutdown) {
+          // Child retirement precedes its final TestFinished. Preserve the result
+          // and reap it before execute returns to the next serial dispatch.
+          retiring = true;
         } else if (message instanceof TestFinished) {
           result.complete(((TestFinished) message).exitCode());
         } else if (message instanceof TestOutput) {

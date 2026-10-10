@@ -71,6 +71,13 @@ jars whose classes may not have loaded yet. Different suites and compatible adde
 jars can share it. A changed digest causes the stale child to shut down and a new
 child to start. Failed or missing digest reads never count as a matching digest.
 
+The retained loader is the JVM's system classloader, so charset providers and
+instrumentation agents can find test classes. Its instrumentation append hook
+preserves reuse for current test jars and bootstrap jars, matching canonical paths
+so symlink aliases count as the same input. An agent appending any other jar makes
+the child retire after the current test result. The coordinator reaps it before
+another dispatch because it has no validated digest for that added jar.
+
 Only runner-owned metadata changes between requests: suite, environment, working
 and temporary directories, and output destinations. Both Java and native code see
 the current environment. General JVM state is retained.
@@ -209,7 +216,11 @@ coordinator, including physical paths containing spaces.
 `ChildReuseTest` sends an ordered pass, fail, pass sequence through a real worker
 coordinator. It verifies the same child and warm static state survive the failed
 suite, then changes a jar digest and requires a fresh child and classloader. It also
-verifies cleanup when the coordinator's request stream reaches EOF.
+verifies that appending validated jars stays warm, appending an unknown agent jar
+requires a fresh child for the next request, and coordinator EOF cleans up children.
+`InstrumentationClassLoaderTest` starts a real Java agent and calls
+`Instrumentation.appendToSystemClassLoaderSearch`, checking class loading, jar
+validation, retained class identity, and the per-request resource view.
 
 ## Observed reuse evidence
 

@@ -177,7 +177,15 @@ final class ReusableTestDriver {
         }
         System.out.flush();
         System.err.flush();
+        if (loader.mustRetire()) {
+          // Announce retirement before the result so the coordinator cannot race
+          // a subsequent dispatch against this child's exit.
+          channel.send(WorkerShutdown.INSTANCE);
+        }
         channel.send(new TestFinished(result));
+        if (loader.mustRetire()) {
+          return;
+        }
       }
     } catch (Throwable e) {
       e.printStackTrace();
@@ -254,5 +262,4 @@ final class ReusableTestDriver {
     extensions.sort(Comparator.comparingInt(Extension::priority));
     return extensions;
   }
-
 }

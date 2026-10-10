@@ -72,9 +72,14 @@ public final class ChildReuseTest {
     String warm = null;
     FieldDescriptor envField = WorkRequest.getDescriptor().findFieldByName("environment");
     try {
-      String[] suites = {"First", "Failure", "Second", "First", "Second", "First"};
-      String[] markers = {"first", "failure", "second", "first", "second", "first"};
+      String[] suites = {
+        "First", "Failure", "Second", "First", "Second", "UnknownInstrumentation", "First", "First"
+      };
+      String[] markers = {
+        "first", "failure", "second", "first", "second", "unknown", "first", "first"
+      };
       int changedDigest = suites.length - 1;
+      int afterInstrumentation = 6;
       for (int i = 0; i < suites.length; i++) {
         if (i == changedDigest) {
           changeJarDigest(fixtureCopy);
@@ -162,7 +167,7 @@ public final class ChildReuseTest {
                 .get(10, TimeUnit.SECONDS);
         check(response != null && response.getRequestId() == i + 1, "Missing response");
         check(
-            response.getExitCode() == (i == 1 ? 1 : 0),
+            response.getExitCode() == (i == 1 || i == afterInstrumentation - 1 ? 1 : 0),
             response.getOutput()
                 + "\nCoordinator stderr: "
                 + new String(
@@ -175,7 +180,7 @@ public final class ChildReuseTest {
           child = identity.group(1);
           startup = identity.group(2);
         }
-        if (i < changedDigest) {
+        if (i < afterInstrumentation) {
           check(
               child.equals(identity.group(1))
                   && startup.equals(identity.group(2))
@@ -186,16 +191,20 @@ public final class ChildReuseTest {
               !child.equals(identity.group(1))
                   && !startup.equals(identity.group(2))
                   && identity.group(3).equals("1"),
-              "Changed jar reused the stale child: " + response.getOutput());
+              "Retired or changed-jar child was reused: " + response.getOutput());
           check(!Files.exists(Paths.get("/proc", child)), "Invalidated child leaked");
           System.out.println(
-              "PASS five dispatches including First -> Failure -> Second shared child "
+              "PASS warm dispatches and "
+                  + (i == afterInstrumentation
+                      ? "unknown-agent retirement of child "
+                      : "changed-jar retirement of child ")
                   + child
                   + ", startup "
                   + startup
                   + ", warm classloader state "
                   + warm);
           child = identity.group(1);
+          startup = identity.group(2);
         }
         Matcher state =
             Pattern.compile("WARM_STATE marker=" + markers[i] + " token=(\\S+) count=(\\d+)")
@@ -204,14 +213,16 @@ public final class ChildReuseTest {
         if (i == 0) {
           warm = state.group(1);
         }
-        if (i < changedDigest) {
+        if (i < afterInstrumentation) {
           check(
               warm.equals(state.group(1)) && Integer.parseInt(state.group(2)) == i + 1,
               "Classloader/static state was replaced: " + response.getOutput());
         } else {
           check(
               !warm.equals(state.group(1)) && state.group(2).equals("1"),
-              "Changed jar retained the stale classloader: " + response.getOutput());
+              "Retired or changed-jar child retained the stale classloader: "
+                  + response.getOutput());
+          warm = state.group(1);
         }
         if (envField != null) {
           check(
@@ -221,7 +232,7 @@ public final class ChildReuseTest {
                       "RUNFILES_CONTEXT expected=request-"
                           + i
                           + " retained="
-                          + (i == changedDigest ? 1 : i + 1)),
+                          + (i >= afterInstrumentation ? 1 : i + 1)),
               response.getOutput());
           check(
               Files.exists(xml)
@@ -235,7 +246,7 @@ public final class ChildReuseTest {
         System.out.println(
             "PASS directory and manifest contexts, changed repository mappings, retained objects,"
                 + " rewritten manifest, relative I/O, native environment, and subprocess context"
-                + " across five warm dispatches");
+                + " across six warm dispatches");
       }
       check(
           process.waitFor(10, TimeUnit.SECONDS) && process.exitValue() == 0,
