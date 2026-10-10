@@ -29,6 +29,7 @@ bzl_library(
     ),
     visibility = ["//visibility:public"],  # for Bazel docgen
     deps = [
+        "//java/bazel/rules/test_runner:persistent_test_info_bzl",
         "//java/common:semantics_bzl",
         "//java/common/rules:core_rules",
         "//java/common/rules/impl",
@@ -58,6 +59,7 @@ filegroup(
         ":java_stub_template.txt",
         ":java_test_runner_wrapper_template.txt",
         ":rules",
+        "//java/bazel/rules/test_runner:for_bazel_tests",
     ],
     visibility = ["//java:__pkg__"],
 )

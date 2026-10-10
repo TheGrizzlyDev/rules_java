@@ -13,10 +13,29 @@
 # limitations under the License.
 load("//java:defs.bzl", "java_binary", "java_library")
 load("//java/bazel/rules:jvm_test_info.bzl", "jvm_persistent_test_runner_info")
+load("@bazel_skylib//:bzl_library.bzl", "bzl_library")
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
 load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
 
 package(default_applicable_licenses = ["@rules_java//:license"])
+
+bzl_library(
+    name = "persistent_test_info_bzl",
+    srcs = ["persistent_test_info.bzl"],
+    visibility = ["//java/bazel/rules:__pkg__"],
+)
+
+# Bazel's mock Java repository copies its Starlark sources from test runfiles.
+# Include the package boundary as well as the provider loaded by java_binary.
+filegroup(
+    name = "for_bazel_tests",
+    testonly = True,
+    srcs = [
+        "BUILD.bazel",
+        ":persistent_test_info_bzl",
+    ],
+    visibility = ["//java/bazel/rules:__pkg__"],
+)
 
 java_binary(
     name = "persistent_test_runner",
