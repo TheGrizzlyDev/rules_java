@@ -20,6 +20,13 @@ load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
 package(default_applicable_licenses = ["@rules_java//:license"])
 
 bzl_library(
+    name = "extensions_bzl",
+    srcs = ["extensions.bzl"],
+    visibility = ["//java/bazel/rules:__pkg__"],
+    deps = ["//java/private:java_info_bzl"],
+)
+
+bzl_library(
     name = "persistent_test_info_bzl",
     srcs = ["persistent_test_info.bzl"],
     visibility = ["//java/bazel/rules:__pkg__"],
@@ -32,6 +39,7 @@ filegroup(
     testonly = True,
     srcs = [
         "BUILD.bazel",
+        ":extensions_bzl",
         ":persistent_test_info_bzl",
     ],
     visibility = ["//java/bazel/rules:__pkg__"],
