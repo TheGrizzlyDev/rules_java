@@ -170,6 +170,7 @@ public final class PersistentTestRunner {
         && wrapperArgs.mainAdvice == null
         && wrapperArgs.mainAdviceClasspath == null
         && wrapperArgs.jvmDebugPort == null
+        && !hasCustomSystemClassLoader(config, wrapperArgs, environment)
         && !System.getProperty("bazel.persistent.reuse", "true").equals("false")) {
       return runReusable(
           config, wrapperArgs, environment, javabin, extensionsFilePath, classpath, stdout, stderr);
@@ -371,6 +372,30 @@ public final class PersistentTestRunner {
     }
   }
 
+  private static boolean hasCustomSystemClassLoader(
+      Config config, WrapperArgs wrapperArgs, Map<String, String> environment) {
+    for (String flag : config.jvmFlags) {
+      if (flag.equals("-Djava.system.class.loader")
+          || flag.startsWith("-Djava.system.class.loader=")) {
+        return true;
+      }
+    }
+    for (String flag : wrapperArgs.jvmFlagsCmdline) {
+      if (flag.equals("-Djava.system.class.loader")
+          || flag.startsWith("-Djava.system.class.loader=")) {
+        return true;
+      }
+    }
+    for (String name :
+        java.util.Arrays.asList("JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS", "JDK_JAVA_OPTIONS")) {
+      String options = environment.get(name);
+      if (options != null && options.contains("-Djava.system.class.loader")) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   private int runReusable(
       Config config,
       WrapperArgs wrapperArgs,
@@ -472,6 +497,8 @@ public final class PersistentTestRunner {
           command.add("--enable-native-access=ALL-UNNAMED");
         }
       }
+      command.add(
+          "-Djava.system.class.loader=com.google.devtools.build.java.testrunner.WarmClassLoader");
       command.add("-Dbazel.persistent.reusable_child=true");
       if (extensionsFile != null) {
         command.add("-Dbazel.persistent.extensions_file=" + extensionsFile);

@@ -31,17 +31,13 @@ import java.io.OutputStream;
 import java.io.PrintStream;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
-import java.net.URL;
-import java.net.URLClassLoader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -93,7 +89,7 @@ final class ReusableTestDriver {
 
     System.setOut(wireOutput(channel, false));
     System.setErr(wireOutput(channel, true));
-    WarmClassLoader loader = new WarmClassLoader(ReusableTestDriver.class.getClassLoader());
+    WarmClassLoader loader = (WarmClassLoader) ClassLoader.getSystemClassLoader();
     Thread.currentThread().setContextClassLoader(loader);
     String token = UUID.randomUUID().toString();
     String pid = pid();
@@ -253,17 +249,4 @@ final class ReusableTestDriver {
     return extensions;
   }
 
-  private static final class WarmClassLoader extends URLClassLoader {
-    private final Set<String> paths = new HashSet<>();
-
-    WarmClassLoader(ClassLoader parent) {
-      super(new URL[0], parent);
-    }
-
-    void append(String path) throws IOException {
-      if (paths.add(path)) {
-        addURL(Paths.get(path).toUri().toURL());
-      }
-    }
-  }
 }

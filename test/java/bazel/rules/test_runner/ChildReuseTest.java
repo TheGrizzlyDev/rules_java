@@ -111,7 +111,7 @@ public final class ChildReuseTest {
           lines.add("classpath_entry_label=" + path);
           lines.add(
               "classpath_entry_path="
-                  + (Paths.get(path).equals(fixtureSource) ? fixtureCopy : path));
+                  + (Files.isSameFile(Paths.get(path), fixtureSource) ? fixtureCopy : path));
         }
         Files.write(config, lines, StandardCharsets.UTF_8);
         WorkRequest.Builder request =

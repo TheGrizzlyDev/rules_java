@@ -73,6 +73,7 @@ java_library(
         "NativeTestContext.java",
         "ReusableCoverage.java",
         "ReusableTestDriver.java",
+        "WarmClassLoader.java",
     ],
     resources = select({
         "@bazel_tools//src/conditions:linux": [":libtest_context.so"],

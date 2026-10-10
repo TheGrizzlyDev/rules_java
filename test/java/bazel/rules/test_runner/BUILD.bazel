@@ -199,7 +199,12 @@ java_test(
 java_library(
     name = "warm_fixtures",
     testonly = True,
-    srcs = ["WarmFixtures.java"],
+    srcs = [
+        "WarmCharsetProvider.java",
+        "WarmFixtures.java",
+    ],
+    resources = ["META-INF/services/java.nio.charset.spi.CharsetProvider"],
+    resource_strip_prefix = "test/java/bazel/rules/test_runner",
     deps = ["//java/runfiles", "@bazel_tools//tools/jdk:TestRunner"],
 )
 

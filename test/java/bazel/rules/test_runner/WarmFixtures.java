@@ -47,6 +47,17 @@ public final class WarmFixtures {
     }
     System.setProperty("warm.proof.state", "retained");
     System.out.println("WARM_STATE marker=" + marker + " token=" + token + " count=" + executions);
+    // Charset's SPI uses the system loader, rather than the thread context loader.
+    // This provider exists only in a test jar, outside the child's bootstrap classpath.
+    java.nio.charset.Charset charset = java.nio.charset.Charset.forName("X-WARM-TEST-CHARSET");
+    if (charset.getClass().getClassLoader() != WarmFixtures.class.getClassLoader()
+        || ClassLoader.getSystemClassLoader().loadClass(WarmFixtures.class.getName())
+            != WarmFixtures.class) {
+      throw new AssertionError("System services cannot see the retained test classloader");
+    }
+    if (!Arrays.equals("café".getBytes(charset), "café".getBytes(StandardCharsets.UTF_8))) {
+      throw new AssertionError("Service-provided charset encoded incorrectly");
+    }
     checkProcessContext();
     String expected = System.getenv("TEST_RUNFILES_EXPECTED");
     if (expected != null) {
